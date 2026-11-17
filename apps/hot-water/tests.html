@@ -1,0 +1,2543 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Самопроверка расчётного ядра</title>
+<style>
+    body { font: 14px/1.5 "Segoe UI", Arial, sans-serif; background: #F5F9FD; color: #1B2A38;
+           margin: 0; padding: 24px 32px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 22px 0 6px; color: #1D6FB8; }
+    p.lead { color: #5B7186; margin: 0 0 18px; max-width: 70em; }
+    .row { font-family: Consolas, "Courier New", monospace; font-size: 13px; padding: 1px 0; }
+    .ok { color: #17916B; }
+    .bad { color: #C0392B; font-weight: 600; }
+    #total { margin-top: 24px; padding: 12px 16px; border-radius: 6px; font-weight: 600; }
+    #total.pass { background: #E4F5EE; color: #0F6B4F; border: 1px solid #9FD9C4; }
+    #total.fail { background: #FCE9E7; color: #97281B; border: 1px solid #EFA79E; }
+</style>
+</head>
+<body>
+
+<h1>Самопроверка расчётного ядра</h1>
+<p class="lead">
+    Числа посчитаны руками и перенесены из <code>HotWaterCirculation\tests\hydraulics.ps1</code> —
+    того же набора, которым проверяется плагин. Расчёт в браузере обязан давать те же
+    значения: если здесь хоть одна строка красная, таблицам расчёта верить нельзя.
+</p>
+<p class="lead">
+    <b>Первое расхождение с плагином.</b> Трение стальных
+    и чугунных труб считается для <b>неновых</b> труб — обросших отложениями, —
+    а не по шероховатости новой трубы. Потери по стали выходят примерно вдвое выше.
+    Берётся это из Ф. А. Шевелёва, но не прямой подстановкой его формулы:
+    из его квадратичной ветви выведена эквивалентная шероховатость заросшей трубы,
+    и дальше работает обычный Альтшуль. Переходная ветвь Шевелёва на циркуляционных
+    скоростях вырождается — при v = 0,03 м/с даёт λ = 0,13, чего на диаграмме Муди
+    нет, — и подставлять её напрямую нельзя. Остальные материалы остались
+    на Альтшуле с табличной шероховатостью.
+</p>
+<p class="lead">
+    <b>Второе расхождение — переходная область.</b> Между Re 2300 и 4000 λ плавно
+    переходит от ламинарной ветви 64/Re к турбулентной, а не прыгает от одной
+    к другой. У плагина на границе 2300 разрыв вдвое: труба при Re 2290 выходит
+    вдвое легче такой же при Re 2310. Для циркуляции ГВС это основной рабочий
+    диапазон — в нём сидит около половины участков, — и на этом разрыве
+    проверочный расчёт не мог сойтись. Ниже 2300 и выше 4000 не изменилось ничего.
+</p>
+
+<div id="report"></div>
+<div id="total"></div>
+
+<script src="js/water.js"></script>
+<script src="js/catalog.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/model.js"></script>
+<script src="js/systemnaming.js"></script>
+<script src="js/heatloss.js"></script>
+<script src="js/hydraulics.js"></script>
+<script src="js/valves.js"></script>
+<script src="js/balancing.js"></script>
+<script src="js/pumps.js"></script>
+<script src="js/rings.js"></script>
+<script src="js/flowsolver.js"></script>
+<script src="js/normsolver.js"></script>
+<script src="js/proof.js"></script>
+<script src="js/edit.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/projection.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/revitimport.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/history.js"></script>
+<script src="js/report.js"></script>
+
+<script>
+'use strict';
+
+var failed = 0;
+var passed = 0;
+var report = document.getElementById('report');
+
+function head(title) {
+    var h = document.createElement('h2');
+    h.textContent = title;
+    report.appendChild(h);
+}
+
+function line(ok, text) {
+    var div = document.createElement('div');
+    div.className = 'row ' + (ok ? 'ok' : 'bad');
+    div.textContent = (ok ? '  [ок]      ' : '  [ОШИБКА]  ') + text;
+    report.appendChild(div);
+    if (ok) passed++; else failed++;
+}
+
+function near(title, actual, expected, tolerance) {
+    var ok = isFinite(actual) && Math.abs(actual - expected) <= tolerance;
+    line(ok, ok
+        ? title + ': ' + fmt(actual)
+        : title + ': получено ' + fmt(actual) + ', ожидалось ' + fmt(expected)
+          + ' (допуск ' + tolerance + ')');
+}
+
+function check(title, ok, detail) {
+    line(!!ok, ok ? title : title + '  -> ' + detail);
+}
+
+function fmt(v) {
+    if (!isFinite(v)) return String(v);
+    return (Math.round(v * 10000) / 10000).toString();
+}
+
+// --- вспомогательная сборка синтетических сетей ------------------------------
+
+function addNode(net, x, y, z) {
+    return net.addNode(new Pt3(x, y, z)).index;
+}
+
+function addSegment(net, a, b, role, len) {
+    var s = net.addSegment(a, b);
+    s.zoneKey = 'Т#';
+    s.length = len;
+    s.nominalDiameterMm = 32.0;
+    s.outerDiameter = 0.032;
+    s.innerDiameter = 0.0273;
+    s.material = 'сталь';
+    s.insulationThickness = 0.010;
+    s.insulationLambda = 0.04;
+
+    if (role === 'supply') s.role = PipeRole.Supply;
+    else if (role === 'return') s.role = PipeRole.Return;
+    else { s.role = PipeRole.None; s.isVirtualLink = true; s.isRingClosure = true; }
+
+    return s.index;
+}
+
+function makeZone(net) {
+    var zone = net.zoneEnsure('Т#', 'Т3 / Т4');
+    zone.segments = [];
+    for (var i = 0; i < net.segments.length; i++)
+        zone.segments.push(i);
+    return zone;
+}
+
+function baseSettings() {
+    var s = new CalcSettings();
+    s.supplyTemperature = 65.0;
+    s.requiredTemperature = 60.0;
+    s.ambientTemperature = 20.0;
+    s.alpha = 7.0;
+    s.localHeatFactor = 0.20;
+    return s;
+}
+
+// --- Т1: термические сопротивления, СП 61.13330 прил. Э ----------------------
+// Стальная труба 27,3/32 мм, изоляция 10 мм с λ = 0,04, α = 7 Вт/(м²·К).
+//   R_из = ln(52/32)/(2π·0,04) = 1,9317 м·К/Вт   (Э.7)
+//   R_α  = 1/(π·0,052·7)       = 0,8745 м·К/Вт   (Э.6)
+
+head('Т1: термические сопротивления по СП 61.13330 прил. Э');
+
+near('R изоляции, м·К/Вт', HeatLoss.layerResistance(0.032, 0.052, 0.04), 1.9317, 0.001);
+near('R теплоотдачи, м·К/Вт', HeatLoss.surfaceResistance(0.052, 7.0), 0.8745, 0.001);
+
+var rWall = HeatLoss.layerResistance(0.0273, 0.032, 50.0);
+check('сопротивление стальной стенки пренебрежимо', rWall < 0.001, 'получено ' + rWall);
+
+var rPp = HeatLoss.layerResistance(0.0262, 0.032, 0.24);
+check('сопротивление стенки полипропилена НЕ пренебрежимо', rPp > 0.1, 'получено ' + rPp);
+
+// --- Т2: линейный тепловой поток --------------------------------------------
+//   ΣR = 0,0005 + 1,9317 + 0,8745 = 2,8067
+//   q  = (62,5 − 20)/2,8067       = 15,14 Вт/м
+
+head('Т2: удельный тепловой поток');
+
+var total = HeatLoss.totalResistance(0.0273, 0.032, 'сталь', 0.010, 0.04, 7.0);
+near('полное сопротивление, м·К/Вт', total, 2.8067, 0.002);
+near('q, Вт/м', HeatLoss.linearFlux(62.5, 20.0, total), 15.14, 0.02);
+
+// --- Т3: коэффициент гидравлического трения ---------------------------------
+
+head('Т3: коэффициент гидравлического трения');
+
+var re = Hydraulics.reynolds(0.5, 0.032);
+near('число Рейнольдса', re, 33472, 50);
+near('λ по Альтшулю', Hydraulics.frictionFactor(re, 0.2, 0.032), 0.03318, 0.0002);
+near('λ в ламинарном режиме = 64/Re', Hydraulics.frictionFactor(1000, 0.2, 0.032), 0.064, 0.0001);
+
+// --- Т4: расход, скорость, Kv -----------------------------------------------
+// Теплопотери 10 кВт при перепаде 5 К:
+//   G = 10000/(4190·5)·3600 = 1718,4 кг/ч = 1,7482 м³/ч
+//   v в трубе Ду32          = 0,6036 м/с
+//   Kv при Δp = 10 кПа      = 1,7482/√0,1 = 5,528
+
+head('Т4: расход, скорость, Kv балансировочного клапана');
+
+var flow = FlowSolver.flowForHeat(10000.0, 5.0);
+near('расход, кг/ч', flow, 1718.4, 1.0);
+
+var byNorm = new CalcSettings();
+byNorm.deltaT = 5.0;
+byNorm.beta = 1.0;
+near('то же по формуле q_cir = β·ΣQ/(c·Δt)',
+     HeatLoss.circulationFlowByNorm(10000.0, byNorm), 1718.4, 2.0);
+
+near('скорость в Ду32, м/с', Hydraulics.velocity(flow, 0.032), 0.6036, 0.001);
+
+var kv = Balancing.kv(flow, 10000.0);
+near('Kv клапана, м³/ч при 1 бар', kv, 5.528, 0.01);
+near('обратная задача: перепад по Kv, Па', Balancing.dropForKv(flow, kv), 10000.0, 1.0);
+
+// --- Т5: сквозной расчёт кольца с тупиковой подводкой ------------------------
+// Кольцо Т3 (30 м) — перемычка — Т4 (30 м), плюс тупиковая подводка 5 м.
+
+head('Т5: сквозной расчёт кольца с тупиковой подводкой');
+
+var net = new HwNetwork();
+
+var src = addNode(net, 0, 0, 0);
+var tee = addNode(net, 0, 0, 15);
+var topN = addNode(net, 0, 0, 30);
+var topR = addNode(net, 1, 0, 30);
+var consumer = addNode(net, 4, 0, 15);
+
+var s1 = addSegment(net, src, tee, 'supply', 15.0);
+var s2 = addSegment(net, tee, topN, 'supply', 15.0);
+var link = addSegment(net, topN, topR, 'link', 0.02);
+var s3 = addSegment(net, topR, src, 'return', 30.0);
+var dead = addSegment(net, tee, consumer, 'supply', 5.0);
+
+makeZone(net);
+net.sourceNodes.push(src);
+
+var settings = baseSettings();
+Calc.run(net, settings);
+
+check('тупиковая подводка не кольцевая', !net.segments[dead].isCirculating, 'помечена кольцевой');
+check('теплопотери тупика не считаются', net.segments[dead].heatLoss === 0.0,
+      'получено ' + net.segments[dead].heatLoss + ' Вт');
+check('найдено одно кольцо', net.rings.length === 1, 'колец: ' + net.rings.length);
+
+if (net.rings.length === 1) {
+    var ring = net.rings[0];
+    near('температура в конце кольца, °C', ring.temperatureAtEnd, 60.0, 0.3);
+    check('расход подобран', ring.flow > 0.0, 'расход: ' + ring.flow);
+    check('потери напора посчитаны', ring.pressureDrop > 0.0, 'Δp: ' + ring.pressureDrop);
+    check('единственное кольцо признано самым невыгодным', ring.isWorstRing, 'не признано');
+    check('клапан единственному кольцу не нужен', ring.requiredKv === 0.0, 'Kv: ' + ring.requiredKv);
+
+    // Расход должен компенсировать остывание ПОДАЮЩЕЙ части: именно она
+    // определяет температуру у потребителя.
+    var supplyHeat = net.segments[s1].heatLoss + net.segments[s2].heatLoss;
+    var expected = FlowSolver.flowForHeat(supplyHeat, 5.0);
+    near('расход отвечает остыванию Т3, кг/ч', ring.flow, expected, expected * 0.1);
+
+    check('теплопотери кольца учитывают и Т3, и Т4', ring.heatLoss > supplyHeat * 1.5,
+          'Q кольца: ' + ring.heatLoss + ', из них Т3: ' + supplyHeat);
+}
+
+// --- Т5б: разбивка теплопотерь по системам -----------------------------------
+
+head('Т5б: теплопотери разнесены по Т3, Т4 и полотенцесушителям');
+
+var z = net.zones[0];
+near('Q Т3 = сумма подающих участков', z.heatLossSupply,
+     net.segments[s1].heatLoss + net.segments[s2].heatLoss, 0.01);
+near('Q Т4 = теплопотери обратки', z.heatLossReturn, net.segments[s3].heatLoss, 0.01);
+near('длина Т3, м', z.lengthSupply, 30.0, 0.001);
+near('длина Т4, м', z.lengthReturn, 30.0, 0.001);
+near('сумма частей равна общему числу',
+     z.heatLossSupply + z.heatLossReturn + z.towelHeat, z.heatLoss, 0.01);
+check('полотенцесушителей нет', z.towelCount === 0, 'шт.: ' + z.towelCount);
+
+// Полотенцесушители на обратке: их теплоотдача не должна попасть в потери труб Т4.
+net.segments[s3].towelRailCount = 2;
+settings.towelRailWatts = 150.0;
+Calc.run(net, settings);
+
+z = net.zones[0];
+near('теплоотдача полотенцесушителей, Вт', z.towelHeat, 300.0, 0.01);
+check('полотенцесушители посчитаны штуками', z.towelCount === 2, 'шт.: ' + z.towelCount);
+near('сумма частей по-прежнему сходится',
+     z.heatLossSupply + z.heatLossReturn + z.towelHeat, z.heatLoss, 0.01);
+check('полотенцесушители не попали в потери труб Т4',
+      z.heatLossReturn < net.segments[s3].heatLoss - 299.0,
+      'Q труб Т4: ' + z.heatLossReturn + ', Q участка целиком: ' + net.segments[s3].heatLoss);
+
+net.segments[s3].towelRailCount = 0;
+
+// --- Т6: переопределение условий прокладки по зонам --------------------------
+
+head('Т6: переопределение условий прокладки по зонам');
+
+var s = new CalcSettings();
+var own = s.zoneEnsure('Т#.1');
+own.hasAlpha = true; own.alpha = 26.0;
+own.hasAmbient = true; own.ambient = -5.0;
+
+near('α своей зоны', s.alphaFor('Т#.1'), 26.0, 0.001);
+near('t окр своей зоны', s.ambientFor('Т#.1'), -5.0, 0.001);
+near('α чужой зоны берётся общая', s.alphaFor('Т#.2'), 7.0, 0.001);
+near('t окр чужой зоны берётся общая', s.ambientFor('Т#.2'), 20.0, 0.001);
+near('α без зоны берётся общая', s.alphaFor(null), 7.0, 0.001);
+
+var partial = s.zoneEnsure('Т#.3');
+partial.hasAmbient = true; partial.ambient = 5.0;
+near('частичное переопределение: t своя', s.ambientFor('Т#.3'), 5.0, 0.001);
+near('частичное переопределение: α общая', s.alphaFor('Т#.3'), 7.0, 0.001);
+
+var restored = CalcSettings.fromJSON(JSON.parse(JSON.stringify(s.toJSON())));
+check('после записи и чтения обе зоны на месте', restored.zones.length === 2,
+      'зон: ' + restored.zones.length);
+near('α зоны пережила запись', restored.alphaFor('Т#.1'), 26.0, 0.001);
+near('t окр зоны пережила запись', restored.ambientFor('Т#.1'), -5.0, 0.001);
+near('частичное переопределение пережило запись', restored.alphaFor('Т#.3'), 7.0, 0.001);
+
+var empty = new CalcSettings();
+empty.zoneEnsure('Т#.9');
+var back = CalcSettings.fromJSON(JSON.parse(JSON.stringify(empty.toJSON())));
+check('пустое переопределение не сохраняется', back.zones.length === 0,
+      'зон: ' + back.zones.length);
+
+// --- Т7: зональные условия влияют на теплопотери -----------------------------
+
+head('Т7: зональные условия влияют на теплопотери');
+
+var indoor = HeatLoss.totalResistance(0.0273, 0.032, 'сталь', 0.010, 0.04, 7.0);
+var outdoor = HeatLoss.totalResistance(0.0273, 0.032, 'сталь', 0.010, 0.04, 26.0);
+var qIndoor = HeatLoss.linearFlux(62.5, 20.0, indoor);
+var qOutdoor = HeatLoss.linearFlux(62.5, -5.0, outdoor);
+
+check('на улице теплопотери выше', qOutdoor > qIndoor * 1.5,
+      'в помещении ' + qIndoor + ', на улице ' + qOutdoor);
+check('α на улице снижает сопротивление', outdoor < indoor,
+      'в помещении ' + indoor + ', на улице ' + outdoor);
+
+// --- Т8: настроечная таблица VT.054 -----------------------------------------
+
+head('Т8: настроечная таблица VT.054 перенесена без искажений');
+
+var dn15 = ValveCatalog.byArticle('VT.054.N.04');
+var dn20 = ValveCatalog.byArticle('VT.054.N.05');
+var dn50 = ValveCatalog.byArticle('VT.054.N.09');
+var lf = ValveCatalog.byArticle('VT.054.NLF.04');
+
+near('Ду20 на положении 10', ValveCatalog.kvAt(dn20, 10), 2.02, 0.001);
+near('Ду20 на положении 15', ValveCatalog.kvAt(dn20, 15), 2.32, 0.001);
+near('Ду20 полностью открыт (положение 99)', dn20.maxKv, 4.68, 0.001);
+near('Ду15 полностью открыт', dn15.maxKv, 4.58, 0.001);
+near('Ду50 полностью открыт', dn50.maxKv, 36.23, 0.001);
+near('Low Flow полностью открыт', lf.maxKv, 2.90, 0.001);
+
+near('мёртвая зона: положение 0', ValveCatalog.kvAt(dn20, 0), 0.0, 0.0001);
+near('мёртвая зона: положение 3', ValveCatalog.kvAt(dn20, 3), 0.0, 0.0001);
+check('выше мёртвой зоны Kv уже есть', ValveCatalog.kvAt(dn20, 4) > 0.0,
+      'получено ' + ValveCatalog.kvAt(dn20, 4));
+
+// --- Т9: пример подбора из паспорта -----------------------------------------
+// Δp = 0,12 бар, Ду 3/4", Q = 0,78 м³/ч → Kv = 2,25 → положение 13,8 → 14
+
+head('Т9: пример подбора из паспорта воспроизводится');
+
+var requiredKv = 0.78 / Math.sqrt(0.12);
+near('требуемый Kv по формуле паспорта', requiredKv, 2.25, 0.005);
+near('положение по округлённому Kv = 2,25, как в паспорте',
+     ValveCatalog.positionFor(dn20, 2.25), 13.833, 0.01);
+
+var pos = ValveCatalog.positionFor(dn20, requiredKv);
+near('положение по неокруглённому Kv', pos, 13.861, 0.01);
+check('принимается положение 14', Math.round(pos) === 14, 'округлено до ' + Math.round(pos));
+near('Kv на найденном положении совпал с требуемым',
+     ValveCatalog.kvAt(dn20, pos), requiredKv, 0.005);
+
+// --- Т10: подбор типоразмера и настройки на кольцо ---------------------------
+
+head('Т10: подбор типоразмера и настройки на кольцо');
+
+// 0,78 м³/ч в кг/ч при плотности 983, перепад 0,12 бар = 12000 Па.
+var sel = ValveSelector.select(0.78 * Water.Density, 12000.0, 20.0);
+check('клапан подобран', sel.found, sel.note);
+near('требуемый Kv', sel.requiredKv, 2.25, 0.005);
+check('настройка в рабочей части шкалы', sel.position >= 10, 'положение ' + sel.position);
+check('взят обычный клапан, а не Low Flow', sel.model && !sel.model.lowFlow,
+      sel.model ? sel.model.caption : 'клапан не подобран');
+near('фактический перепад согласован с фактическим Kv', sel.actualDrop,
+     Balancing.dropForKv(0.78 * Water.Density, sel.actualKv), 1.0);
+
+var small = ValveSelector.select(0.05 * Water.Density, 200000.0, 15.0);
+check('при малом Kv выбирается Low Flow', small.model && small.model.lowFlow,
+      small.model ? small.model.caption : 'клапан не подобран');
+
+var huge = ValveSelector.select(200.0 * Water.Density, 100.0, 50.0);
+check('при недостижимом Kv клапан не подбирается', !huge.found, 'подобрался');
+check('отказ сопровождается объяснением', !!huge.note, 'нет замечания');
+
+var none = ValveSelector.select(1000.0, 0.0, 25.0);
+check('при нулевом перепаде клапан не нужен', !none.found, 'подобрался');
+
+// --- Т11: расчёт по СП, деление расхода на узле ------------------------------
+// Два одинаковых кольца на общей магистрали: расход должен разделиться пополам.
+
+head('Т11: расчёт по СП, деление расхода на узле');
+
+var net2 = new HwNetwork();
+
+var src2 = addNode(net2, 0, 0, 0);
+var split = addNode(net2, 0, 0, 2);
+var topA = addNode(net2, 0, 0, 30);
+var retA = addNode(net2, 1, 0, 30);
+var topB = addNode(net2, 5, 0, 30);
+var retB = addNode(net2, 6, 0, 30);
+
+var main = addSegment(net2, src2, split, 'supply', 2.0);
+var supA = addSegment(net2, split, topA, 'supply', 28.0);
+addSegment(net2, topA, retA, 'link', 0.02);
+addSegment(net2, retA, src2, 'return', 30.0);
+var supB = addSegment(net2, split, topB, 'supply', 28.0);
+addSegment(net2, topB, retB, 'link', 0.02);
+addSegment(net2, retB, src2, 'return', 30.0);
+
+makeZone(net2);
+net2.sourceNodes.push(src2);
+
+var sp = baseSettings();
+sp.deltaT = 5.0;
+sp.beta = 1.0;
+sp.useNormMethod = true;
+// Строгая буква СП: ΣQ по всей системе.
+sp.normHeatSupplyOnly = false;
+
+Calc.run(net2, sp);
+
+check('найдено два кольца', net2.rings.length === 2, 'колец: ' + net2.rings.length);
+
+if (net2.rings.length === 2) {
+    var fA = net2.rings[0].flow;
+    var fB = net2.rings[1].flow;
+    near('кольца одинаковые — расход делится пополам', fA, fB, 0.01);
+
+    var sum = fA + fB;
+    var byFormula = HeatLoss.circulationFlowByNorm(HeatLoss.total(net2), sp);
+    near('сумма расходов колец равна расходу по формуле', sum, byFormula, 0.5);
+
+    near('в магистрали весь расход', net2.segments[main].flow, sum, 0.5);
+    near('в стояке А половина', net2.segments[supA].flow, sum / 2.0, 0.5);
+    near('в стояке Б половина', net2.segments[supB].flow, sum / 2.0, 0.5);
+}
+
+// --- Т12: топология — участок кольцевой тогда и только тогда, когда он на цикле
+
+head('Т12: топология, кольцевые и тупиковые участки');
+
+// Стояк без перемычки: весь из мостов, циркуляции в нём нет.
+var net3 = new HwNetwork();
+var a3 = addNode(net3, 0, 0, 0);
+var b3 = addNode(net3, 0, 0, 10);
+var c3 = addNode(net3, 0, 0, 20);
+var noLink1 = addSegment(net3, a3, b3, 'supply', 10.0);
+var noLink2 = addSegment(net3, b3, c3, 'supply', 10.0);
+makeZone(net3);
+net3.sourceNodes.push(a3);
+Calc.run(net3, baseSettings());
+
+check('стояк без перемычки не даёт колец', net3.rings.length === 0,
+      'колец: ' + net3.rings.length);
+check('его участки не кольцевые',
+      !net3.segments[noLink1].isCirculating && !net3.segments[noLink2].isCirculating,
+      'помечены кольцевыми');
+
+// Две параллельные нитки между теми же узлами мостами не являются.
+var net4 = new HwNetwork();
+var a4 = addNode(net4, 0, 0, 0);
+var b4 = addNode(net4, 0, 0, 20);
+var pipeA = addSegment(net4, a4, b4, 'supply', 20.0);
+var pipeB = addSegment(net4, a4, b4, 'return', 20.0);
+makeZone(net4);
+net4.sourceNodes.push(a4);
+Calc.run(net4, baseSettings());
+
+check('две параллельные нитки лежат на цикле и мостами не являются',
+      net4.segments[pipeA].isCirculating && net4.segments[pipeB].isCirculating,
+      'помечены тупиковыми');
+
+// --- Т13: ручной балансировочный клапан --------------------------------------
+// Два неравных кольца: длинное и короткое. Короткому нужен клапан, и он должен
+// встать туда, куда его поставил человек, а не на автоматическое место.
+
+head('Т13: клапан встаёт туда, куда его поставил человек');
+
+var net5 = new HwNetwork();
+var src5 = addNode(net5, 0, 0, 0);
+var sp5 = addNode(net5, 0, 0, 2);
+var farTop = addNode(net5, 0, 0, 40);
+var farRet = addNode(net5, 1, 0, 40);
+var nearTop = addNode(net5, 5, 0, 10);
+var nearRet = addNode(net5, 6, 0, 10);
+
+addSegment(net5, src5, sp5, 'supply', 2.0);
+addSegment(net5, sp5, farTop, 'supply', 38.0);
+addSegment(net5, farTop, farRet, 'link', 0.02);
+addSegment(net5, farRet, src5, 'return', 40.0);
+addSegment(net5, sp5, nearTop, 'supply', 8.0);
+addSegment(net5, nearTop, nearRet, 'link', 0.02);
+var nearReturn = addSegment(net5, nearRet, src5, 'return', 10.0);
+
+makeZone(net5);
+net5.sourceNodes.push(src5);
+
+// Клапан ставится вручную на подающий короткого кольца — не туда, куда
+// его поставил бы расчёт сам (на Т4 у врезки).
+var manualOn = 4;
+net5.segments[manualOn].valve = {
+    automatic: false, inUse: false, model: null, position: 0, exactPosition: 0.0,
+    requiredKv: 0.0, actualKv: 0.0, actualDrop: 0.0, ringNumber: 0, note: ''
+};
+
+Calc.run(net5, baseSettings());
+
+check('собрано два кольца', net5.rings.length === 2, 'колец: ' + net5.rings.length);
+
+var shortRing = null;
+for (var i = 0; i < net5.rings.length; i++) {
+    if (!net5.rings[i].isWorstRing) shortRing = net5.rings[i];
+}
+
+check('короткому кольцу нужен клапан', shortRing && shortRing.needsValve,
+      shortRing ? 'невязка ' + shortRing.imbalance : 'кольцо не найдено');
+check('клапан встал на участок, указанный человеком',
+      shortRing && shortRing.valveSegment === manualOn,
+      shortRing ? 'встал на участок ' + shortRing.valveSegment : 'кольцо не найдено');
+check('на автоматическое место клапан не подставился',
+      !net5.segments[nearReturn].valve,
+      'подставился на Т4 у врезки');
+check('перепад клапана вошёл в потери участка',
+      net5.segments[manualOn].pressureDrop > net5.segments[manualOn].pipeDrop,
+      'Δp участка ' + net5.segments[manualOn].pressureDrop
+      + ', из них труба ' + net5.segments[manualOn].pipeDrop);
+
+// --- Т14: ИТП двумя узлами ---------------------------------------------------
+// Так его и рисуют: выход Т3 и вход Т4 стоят на разных отметках и помечаются
+// по отдельности. Пока они не собраны в пару, в графе нет ни одного цикла,
+// все участки оказываются мостами и кольца не собираются вовсе.
+
+head('Т14: ИТП, помеченный двумя отдельными узлами');
+
+var net6 = new HwNetwork();
+var outT3 = addNode(net6, 0, 0, 0);
+var inT4 = addNode(net6, 0, 0, 1);
+var upT3 = addNode(net6, 0, 0, 30);
+var upT4 = addNode(net6, 1, 0, 30);
+
+addSegment(net6, outT3, upT3, 'supply', 30.0);
+addSegment(net6, upT3, upT4, 'link', 0.02);
+addSegment(net6, upT4, inT4, 'return', 29.0);
+
+makeZone(net6);
+net6.sourceNodes.push(outT3);
+net6.sourceNodes.push(inT4);
+
+Calc.run(net6, baseSettings());
+
+check('пара «выход Т3 — вход Т4» собрана в кольцо', net6.rings.length === 1,
+      'колец: ' + net6.rings.length);
+check('замыкание внутри ИТП достроено', net6.segments.length === 4,
+      'участков: ' + net6.segments.length);
+check('оно помечено как соединение ИТП, а не как труба',
+      net6.segments[3] && net6.segments[3].isSourceLink && net6.segments[3].length === 0,
+      'участок 3 не то, чем должен быть');
+check('теплопотери на замыкании не считаются',
+      net6.segments[3] && net6.segments[3].heatLoss === 0,
+      'Q = ' + (net6.segments[3] ? net6.segments[3].heatLoss : '?'));
+
+if (net6.rings.length === 1) {
+    near('температура в конце кольца, °C', net6.rings[0].temperatureAtEnd, 60.0, 0.5);
+    check('расход подобран', net6.rings[0].flow > 0, 'расход: ' + net6.rings[0].flow);
+}
+
+// Вход Т4 не должен держаться на 65 °C: туда вода приходит уже остывшей,
+// и подменять её температуру подачей значило бы скрыть как раз то, ради чего считают.
+check('на входе Т4 показана пришедшая температура, а не подача',
+      net6.nodes[inT4].temperature < 64.0,
+      't входа Т4 = ' + net6.nodes[inT4].temperature);
+
+// Повторный прогон не должен плодить новые соединения ИТП.
+Calc.run(net6, baseSettings());
+check('повторный расчёт не плодит замыканий ИТП', net6.segments.length === 4,
+      'участков после второго прогона: ' + net6.segments.length);
+
+/*
+    Труба, дорисованная ПОСЛЕ расчёта, встаёт в массиве за соединением ИТП.
+    На следующем прогоне соединение снимается, и индексы сдвигаются — если зоны
+    к этому моменту уже собраны, их списки указывают на чужие участки, и расчёт
+    молча идёт не по тем трубам. Проверяется именно это.
+*/
+var branch = addNode(net6, 6, 0, 30);
+addSegment(net6, upT3, branch, 'supply', 6.0);
+Calc.run(net6, baseSettings());
+
+check('после дорисовки трубы кольцо на месте', net6.rings.length === 1,
+      'колец: ' + net6.rings.length);
+
+var zoneSix = net6.zones[0];
+var indicesValid = true;
+for (var q = 0; q < zoneSix.segments.length; q++) {
+    var inZone = net6.segments[zoneSix.segments[q]];
+    if (!inZone || inZone.zoneKey !== zoneSix.key) indicesValid = false;
+}
+check('участки зоны не разъехались с индексами', indicesValid,
+      'зона ссылается на чужие участки');
+
+near('сумма теплопотерь зоны сходится с участками', zoneSix.heatLoss,
+     zoneSix.heatLossSupply + zoneSix.heatLossReturn + zoneSix.towelHeat, 0.01);
+
+// --- Т15: перемычка, нарисованная в обратную сторону -------------------------
+// Рукой её рисуют с той стороны, с которой удобнее, и конец на Т4 запросто
+// оказывается первым. Кольцо обязано собраться и в этом случае.
+
+head('Т15: перемычка, нарисованная от Т4 к Т3');
+
+var net7 = new HwNetwork();
+var src7 = addNode(net7, 0, 0, 0);
+var t3top = addNode(net7, 0, 0, 30);
+var t4top = addNode(net7, 1, 0, 30);
+
+addSegment(net7, src7, t3top, 'supply', 30.0);
+addSegment(net7, t4top, t3top, 'link', 0.02);      // конец Т4 указан первым
+addSegment(net7, t4top, src7, 'return', 30.0);
+
+makeZone(net7);
+net7.sourceNodes.push(src7);
+
+Calc.run(net7, baseSettings());
+
+check('кольцо собралось несмотря на обратный порядок концов', net7.rings.length === 1,
+      'колец: ' + net7.rings.length);
+
+if (net7.rings.length === 1) {
+    near('температура в конце кольца, °C', net7.rings[0].temperatureAtEnd, 60.0, 0.5);
+    check('дальней точкой взят узел на подающей стороне',
+          net7.rings[0].farNode === t3top,
+          'взят узел ' + net7.rings[0].farNode + ', а надо ' + t3top);
+}
+
+// --- Т16: почему кольцо не собралось — программа обязана сказать --------------
+// Молчание здесь хуже неверного ответа: искать разрыв глазами на плотной схеме
+// это часы. Проверяется, что причина названа, и названа правильная.
+
+head('Т16: причина, по которой кольцо не собралось');
+
+function saidSomethingAbout(net, part) {
+    for (var i = 0; i < net.diagnostics.length; i++) {
+        if (net.diagnostics[i].indexOf(part) >= 0) return net.diagnostics[i];
+    }
+    return null;
+}
+
+// Перемычка есть, подача доходит, а обратка до ИТП не доведена.
+var net8 = new HwNetwork();
+var s8 = addNode(net8, 0, 0, 0), r8 = addNode(net8, 0, 0, 1);
+var up8 = addNode(net8, 0, 0, 20), upr8 = addNode(net8, 1, 0, 20);
+var loose8 = addNode(net8, 5, 0, 1);
+
+addSegment(net8, s8, up8, 'supply', 20.0);
+addSegment(net8, up8, upr8, 'link', 0.02);
+addSegment(net8, upr8, loose8, 'return', 20.0);   // до входа Т4 не доведена
+
+makeZone(net8);
+net8.sourceNodes.push(s8);
+net8.sourceNodes.push(r8);
+
+Calc.run(net8, baseSettings());
+
+check('кольцо не собралось', net8.rings.length === 0, 'колец: ' + net8.rings.length);
+
+var why = saidSomethingAbout(net8, 'Перемычка на отметке');
+check('программа объяснила, почему', !!why, 'диагностика молчит про перемычку');
+check('названа именно обратка, а не подача',
+      why && why.indexOf('циркуляционный Т4') >= 0 && why.indexOf('Подающий Т3 доходит') >= 0,
+      why || 'нет сообщения');
+
+// Концы Т3 и Т4 стоят рядом, но перемычки нет.
+var net9 = new HwNetwork();
+var s9 = addNode(net9, 0, 0, 0), r9 = addNode(net9, 0, 0, 1);
+var up9 = addNode(net9, 0, 0, 20), upr9 = addNode(net9, 0.04, 0, 20);
+
+addSegment(net9, s9, up9, 'supply', 20.0);
+addSegment(net9, upr9, r9, 'return', 20.0);
+
+makeZone(net9);
+net9.sourceNodes.push(s9);
+net9.sourceNodes.push(r9);
+
+Calc.run(net9, baseSettings());
+
+var gap = saidSomethingAbout(net9, 'не соединены');
+check('близкие концы Т3 и Т4 найдены и названы', !!gap, 'диагностика молчит про зазор');
+check('назван и зазор в миллиметрах', gap && gap.indexOf('40 мм') >= 0, gap || 'нет сообщения');
+check('назван и незаконченный конец трубы',
+      !!saidSomethingAbout(net9, 'Незаконченных концов труб'), 'про концы не сказано');
+
+// --- Т17: участок с отводом рисуется углом, а не диагональю -------------------
+// Участок — это свёрнутая цепочка «труба — отвод — труба», и идёт она не по прямой.
+// Прямая от начала к концу превращает угол трубы в диагональ, которой в модели нет.
+
+head('Т17: участок с отводом рисуется по настоящему ходу трубы');
+
+var corner = {
+    'формат': 'ГВС-Циркуляция-Revit', 'версия': 1, 'проект': 'Угол',
+    'узлы': [
+        { i: 0, x: 0, y: 0, z: 1 }, { i: 1, x: 0, y: 0, z: 0 },
+        { i: 2, x: 30, y: 0, z: 1 }, { i: 3, x: 30, y: 0, z: 0 },
+        { i: 4, x: 40, y: 0, z: 20 }, { i: 5, x: 41, y: 0, z: 20 }
+    ],
+    'участки': [
+        pipeItem(0, 0, 2, 'Т3.1', 3, 30, [[0, 0, 1], [30, 0, 1]]),
+        // Труба идёт вверх, потом вправо — угол на отметке 20 м.
+        pipeItem(1, 2, 4, 'Т3.1', 3, 29, [[30, 0, 1], [30, 0, 20], [40, 0, 20]]),
+        { i: 2, a: 4, b: 5, 'система': null, 'роль': 0, 'длина': 0.02, 'ду': 0,
+          'dн': 0, 'dвн': 0, 'материал': null, 'виртуальный': true, 'замыкание': true,
+          'ломаная': [] },
+        pipeItem(3, 5, 3, 'Т4.1', 4, 30, [[41, 0, 20], [41, 0, 0], [30, 0, 0]]),
+        pipeItem(4, 3, 1, 'Т4.1', 4, 30, [[30, 0, 0], [0, 0, 0]])
+    ],
+    'источники': []
+};
+
+var imported = RevitImport.parse(corner, baseSettings()).network;
+NetworkEdit.toggleSource(imported, 0);
+NetworkEdit.toggleSource(imported, 1);
+Calc.run(imported, baseSettings());
+
+check('кольцо собралось', imported.rings.length === 1, 'колец: ' + imported.rings.length);
+check('ломаная участка с отводом сохранилась при импорте',
+      imported.segments[1].polyline.length === 3,
+      'точек: ' + imported.segments[1].polyline.length);
+
+// Схема рисуется на настоящем холсте: проверяется то, что увидит человек.
+var canvas = document.createElement('canvas');
+canvas.width = 900; canvas.height = 600;
+canvas.style.width = '900px'; canvas.style.height = '600px';
+document.body.appendChild(canvas);
+
+var stub = {
+    network: imported, settings: baseSettings(), colourMode: 'kind',
+    template: { zoneKey: 'Т#', defaultLength: 3 },
+    selection: null,
+    accepts: function () { return true; },
+    acceptsZoneKey: function () { return true; },
+    isSelected: function () { return false; },
+    isHighlighted: function () { return false; },
+    select: function () { },
+    afterEdit: function () { }
+};
+
+var view = new SchemeView(canvas, '3d', stub);
+view.projection.azimuth = ViewPresets[0].azimuth;      // вид спереди, как в Revit
+view.projection.elevation = ViewPresets[0].elevation;
+view.fit();
+
+var way = view.wayOf(imported.segments[1]);
+check('на схеме участок ведётся по трём точкам, а не по двум',
+      way && way.length === 3, 'точек на экране: ' + (way ? way.length : 0));
+
+if (way && way.length === 3) {
+    // Угол должен заметно отстоять от прямой между концами — иначе рисовалась
+    // бы та самая диагональ, которой в модели нет.
+    var cut = Projection.distanceToSegment(way[1].x, way[1].y,
+        way[0].x, way[0].y, way[2].x, way[2].y);
+
+    check('прямая между концами срезала бы угол больше чем на 50 px', cut > 50,
+          'срез всего ' + Math.round(cut) + ' px');
+
+    check('ломаная начинается у узла A, а не с чужого конца',
+          Math.abs(way[0].x - view.screenOf(imported.segments[1].nodeA).x) < 1,
+          'начало ломаной не совпало с узлом A');
+}
+
+// Попадание мышью тоже должно идти по трубе, а не по прямой.
+if (way && way.length === 3) {
+    var onPipe = view.pick((way[0].x + way[1].x) / 2, (way[0].y + way[1].y) / 2);
+    check('мышь попадает по трубе', onPipe && onPipe.kind === 'segment',
+          'по трубе не попали');
+
+    var onChord = view.pick((way[0].x + way[2].x) / 2 + 40, (way[0].y + way[2].y) / 2);
+    check('мышь не ловит пустое место там, где трубы нет',
+          !onChord || onChord.kind !== 'segment', 'поймали пустоту');
+}
+
+document.body.removeChild(canvas);
+
+function pipeItem(i, a, b, system, role, length, way) {
+    return {
+        i: i, a: a, b: b, 'система': system, 'роль': role, 'длина': length,
+        'ду': 25, 'dн': 0.0335, 'dвн': 0.0271, 'материал': 'Сталь ВГП ГОСТ 3262-75',
+        'изоляция': { 'имя': 'Каучук', 'толщина': 0.013, 'лямбда': 0.036, 'изМодели': true },
+        'ломаная': way
+    };
+}
+
+// --- Т18: таблица показывает то, что записано в участке -----------------------
+// Материал и изоляция в модели называются как угодно: «Полипропилен» из Revit
+// ни одному имени каталога не равен. Список без подходящего пункта показывал
+// пустую ячейку — выглядело так, будто данные не загрузились, хотя в участке
+// они есть. Хуже того: тронув такой список, человек затёр бы числа модели.
+
+head('Т18: в таблице видно то, что пришло из модели');
+
+function ownItem(i, a, b, system, role, length) {
+    return {
+        i: i, a: a, b: b, 'система': system, 'роль': role, 'длина': length,
+        'ду': 50, 'dн': 0.050, 'dвн': 0.0362, 'материал': 'Полипропилен',
+        'изоляция': { 'имя': 'K-Flex ST', 'толщина': 0.013, 'лямбда': 0.036, 'изМодели': true },
+        'ломаная': []
+    };
+}
+
+var alien = RevitImport.parse({
+    'формат': 'ГВС-Циркуляция-Revit', 'версия': 1, 'проект': 'Чужой материал',
+    'узлы': [{ i: 0, x: 0, y: 0, z: 1 }, { i: 1, x: 0, y: 0, z: 0 },
+             { i: 2, x: 0, y: 0, z: 20 }, { i: 3, x: 1, y: 0, z: 20 }],
+    'участки': [
+        ownItem(0, 0, 2, 'Т3.1', 3, 20),
+        { i: 1, a: 2, b: 3, 'система': null, 'роль': 0, 'длина': 0.02, 'ду': 0,
+          'dн': 0, 'dвн': 0, 'материал': null, 'виртуальный': true,
+          'замыкание': true, 'ломаная': [] },
+        ownItem(2, 3, 1, 'Т4.1', 4, 20)
+    ],
+    'источники': []
+}, baseSettings()).network;
+
+NetworkEdit.toggleSource(alien, 0);
+NetworkEdit.toggleSource(alien, 1);
+Calc.run(alien, baseSettings());
+
+var tableApp = {
+    network: alien, settings: baseSettings(), selection: null,
+    accepts: function () { return true; },
+    acceptsZoneKey: function () { return true; },
+    afterEdit: function () { },
+    select: function () { }
+};
+
+var grid = Tables.renderSegments(tableApp);
+document.body.appendChild(grid);
+
+var cells = grid.querySelector('tbody tr').querySelectorAll('td');
+
+function shown(k) {
+    var control = cells[k].querySelector('select');
+    if (!control) return null;
+    return control.selectedIndex >= 0 ? control.options[control.selectedIndex].textContent : '';
+}
+
+check('материал из модели виден в списке, а не пустая ячейка',
+      shown(6) && shown(6).indexOf('Полипропилен') === 0, 'показано: ' + shown(6));
+check('он помечен как пришедший из модели',
+      shown(6) && shown(6).indexOf('из модели') > 0, 'показано: ' + shown(6));
+check('каталожные материалы из списка не пропали',
+      cells[6].querySelector('select').options.length > PipeCatalog.MaterialNames.length,
+      'пунктов: ' + cells[6].querySelector('select').options.length);
+
+check('Ду из модели виден, хотя такого материала в каталоге нет',
+      shown(7) && shown(7).indexOf('Ду50') === 0, 'показано: ' + shown(7));
+check('в подписи Ду видны и наружный размер, и стенка',
+      shown(7) && shown(7).indexOf('50×6,9') > 0, 'показано: ' + shown(7));
+
+check('изоляция из модели видна вместе со своей λ',
+      shown(9) && shown(9).indexOf('K-Flex ST') === 0 && shown(9).indexOf('0,036') > 0,
+      'показано: ' + shown(9));
+check('толщина из модели выбрана', cells[10].querySelector('select').value === '13',
+      'значение: ' + cells[10].querySelector('select').value);
+
+document.body.removeChild(grid);
+
+// Переключение на каталожный материал должно работать по-прежнему
+// и подтягивать за собой настоящий внутренний диаметр.
+var target = alien.segments[0];
+Calc.applySize(target, 'Полипропилен PP-R PN25 стекловолокно', 50);
+
+near('после смены материала внутренний диаметр взят из каталога',
+     target.innerDiameter, 0.0458, 1e-6);
+check('и список диаметров у него уже не пустой',
+      PipeCatalog.sizesOf(target.material).length > 0,
+      'размеров: ' + PipeCatalog.sizesOf(target.material).length);
+
+// --- Т19: отмена и возврат ---------------------------------------------------
+// Удалил трубу — шаг назад вернул. Поменял диаметр — шаг назад вернул прежний.
+// Отмена восстанавливает состояние целиком, поэтому проверяется не только
+// сама правка, но и то, что пересобралось следом: кольца.
+
+head('Т19: шаг назад и шаг вперёд');
+
+var histNet = new HwNetwork();
+var h1 = addNode(histNet, 0, 0, 0);
+var h2 = addNode(histNet, 0, 0, 20);
+var h3 = addNode(histNet, 1, 0, 20);
+
+var hSupply = addSegment(histNet, h1, h2, 'supply', 20.0);
+addSegment(histNet, h2, h3, 'link', 0.02);
+addSegment(histNet, h3, h1, 'return', 20.0);
+
+makeZone(histNet);
+histNet.sourceNodes.push(h1);
+
+var histApp = {
+    projectName: 'История', network: histNet, settings: baseSettings(),
+    template: { zoneKey: 'Т#' }, selection: null
+};
+
+Calc.run(histApp.network, histApp.settings);
+History.reset(histApp);
+
+check('в новой истории отменять нечего', !History.canUndo(), 'шагов: ' + History.depth());
+check('исходно одно кольцо', histApp.network.rings.length === 1,
+      'колец: ' + histApp.network.rings.length);
+
+// Удаление трубы
+NetworkEdit.removeSegment(histApp.network, hSupply);
+History.record(histApp, 'удаление');
+Calc.run(histApp.network, histApp.settings);
+
+check('после удаления кольца не стало', histApp.network.rings.length === 0,
+      'колец: ' + histApp.network.rings.length);
+check('шаг отмены записан', History.canUndo(), 'шагов: ' + History.depth());
+check('и он подписан', History.undoLabel() === 'удаление', 'подпись: ' + History.undoLabel());
+
+History.undo(histApp);
+Calc.run(histApp.network, histApp.settings);
+
+check('шаг назад вернул трубу',
+      histApp.network.segments.filter(function (s) { return !s.isSourceLink; }).length === 3,
+      'участков: ' + histApp.network.segments.length);
+check('и кольцо собралось заново', histApp.network.rings.length === 1,
+      'колец: ' + histApp.network.rings.length);
+check('после отмены появился шаг вперёд', History.canRedo(), 'возврата нет');
+
+History.redo(histApp);
+Calc.run(histApp.network, histApp.settings);
+check('шаг вперёд снова удалил трубу', histApp.network.rings.length === 0,
+      'колец: ' + histApp.network.rings.length);
+
+History.undo(histApp);
+Calc.run(histApp.network, histApp.settings);
+
+// Смена диаметра
+var live = histApp.network.segments[0];
+Calc.applySize(live, 'Сталь ВГП ГОСТ 3262-75', 32);
+History.record(histApp, 'смену диаметра');
+Calc.run(histApp.network, histApp.settings);
+
+var wide = histApp.network.segments[0].innerDiameter;
+Calc.applySize(histApp.network.segments[0], 'Сталь ВГП ГОСТ 3262-75', 20);
+History.record(histApp, 'смену диаметра');
+Calc.run(histApp.network, histApp.settings);
+
+check('диаметр поменялся', histApp.network.segments[0].innerDiameter < wide,
+      'Dвн: ' + histApp.network.segments[0].innerDiameter);
+
+History.undo(histApp);
+Calc.run(histApp.network, histApp.settings);
+near('шаг назад вернул прежний внутренний диаметр',
+     histApp.network.segments[0].innerDiameter, wide, 1e-9);
+
+// Пустых шагов в стопке быть не должно: «Отменить» не должно нажиматься впустую.
+var depth = History.depth();
+History.record(histApp, 'ничего');
+check('правка, ничего не изменившая, шага не создаёт', History.depth() === depth,
+      'шагов было ' + depth + ', стало ' + History.depth());
+
+// Новая правка обрывает ветку возврата — как в любом редакторе.
+History.undo(histApp);
+check('после отмены есть что вернуть', History.canRedo(), 'возврата нет');
+
+NetworkEdit.removeSegment(histApp.network, 0);
+History.record(histApp, 'удаление');
+check('новая правка отменяет возврат', !History.canRedo(), 'возврат остался');
+
+// Результаты расчёта в снимок не входят: они пересчитываются, а не хранятся.
+var packed = Storage.pack(histApp);
+var hasResults = JSON.stringify(packed).indexOf('"расход"') >= 0
+    || JSON.stringify(packed).indexOf('"скорость"') >= 0;
+check('в снимке нет результатов расчёта, только исходные данные', !hasResults,
+      'результаты попали в снимок');
+
+// --- Т20: узел в примыкании --------------------------------------------------
+// Подводку тянут до магистрали и упираются в неё посередине. Узла там нет,
+// и без разреза линии пересекаются только на картинке: в графе это два
+// несвязанных куска, и кольцо через них не замыкается.
+
+head('Т20: труба разрезается там, где в неё упёрлись');
+
+function branchNet() {
+    var net = new HwNetwork();
+    var left = addNode(net, 0, 0, 0);
+    var right = addNode(net, 30, 0, 0);
+    var over = addNode(net, 15, 0, 10);
+    var touch = addNode(net, 15, 0, 0);
+
+    addSegment(net, left, right, 'supply', 30.0);
+    addSegment(net, over, touch, 'supply', 10.0);
+
+    makeZone(net);
+    return { net: net, touch: touch, over: over };
+}
+
+var branch = branchNet();
+var splitCount = NetworkEdit.splitAtTouchingNodes(branch.net, 0.02);
+
+check('разрез сделан один раз, а не по кругу', splitCount === 1, 'разрезов: ' + splitCount);
+check('участков стало три', branch.net.segments.length === 3,
+      'участков: ' + branch.net.segments.length);
+check('новых узлов не появилось — использован тот, что уже упирался',
+      branch.net.nodes.length === 4, 'узлов: ' + branch.net.nodes.length);
+check('узел примыкания связал три участка',
+      branch.net.nodes[branch.touch].segments.length === 3,
+      'участков у узла: ' + branch.net.nodes[branch.touch].segments.length);
+
+near('первая половина магистрали, м', branch.net.segments[0].length, 15.0, 1e-6);
+near('вторая половина магистрали, м', branch.net.segments[2].length, 15.0, 1e-6);
+near('сумма половин равна исходной длине, м',
+     branch.net.segments[0].length + branch.net.segments[2].length, 30.0, 1e-9);
+
+check('свойства трубы перешли на обе половины',
+      branch.net.segments[2].material === branch.net.segments[0].material
+      && branch.net.segments[2].nominalDiameterMm === branch.net.segments[0].nominalDiameterMm
+      && branch.net.segments[2].role === PipeRole.Supply,
+      'вторая половина получилась другой трубой');
+
+// Повторное нажатие ничего не должно менять: резать больше нечего.
+var again = NetworkEdit.splitAtTouchingNodes(branch.net, 0.02);
+check('повторный разрез ничего не находит', again === 0, 'разрезов: ' + again);
+check('и участков не прибавилось', branch.net.segments.length === 3,
+      'участков: ' + branch.net.segments.length);
+
+// Разрез должен замкнуть кольцо, которое без него не собиралось.
+var ringNet = new HwNetwork();
+var rSupplyOut = addNode(ringNet, 0, 0, 0);
+var rReturnIn = addNode(ringNet, 0, 0, 1);
+var rMainEnd = addNode(ringNet, 30, 0, 0);
+var rUp = addNode(ringNet, 15, 0, 20);
+var rUpR = addNode(ringNet, 16, 0, 20);
+var rTouch = addNode(ringNet, 15, 0, 0);
+
+addSegment(ringNet, rSupplyOut, rMainEnd, 'supply', 30.0);   // магистраль Т3
+addSegment(ringNet, rTouch, rUp, 'supply', 20.0);            // стояк Т3, упёрся в неё
+addSegment(ringNet, rUp, rUpR, 'link', 0.02);
+addSegment(ringNet, rUpR, rReturnIn, 'return', 20.0);
+
+makeZone(ringNet);
+ringNet.sourceNodes.push(rSupplyOut);
+ringNet.sourceNodes.push(rReturnIn);
+
+Calc.run(ringNet, baseSettings());
+check('без узла в примыкании кольцо не собирается', ringNet.rings.length === 0,
+      'колец: ' + ringNet.rings.length);
+
+NetworkEdit.splitAtTouchingNodes(ringNet, 0.02);
+Calc.run(ringNet, baseSettings());
+check('после разреза кольцо собралось', ringNet.rings.length === 1,
+      'колец: ' + ringNet.rings.length);
+
+// Участок с отводом режется по трубе, а не по прямой между концами.
+var bentNet = new HwNetwork();
+var bendA = addNode(bentNet, 0, 0, 0);
+var bendB = addNode(bentNet, 10, 0, 10);
+var bent = bentNet.segments[addSegment(bentNet, bendA, bendB, 'supply', 20.0)];
+bent.polyline = [new Pt3(0, 0, 0), new Pt3(0, 0, 10), new Pt3(10, 0, 10)];
+
+var onBend = NetworkEdit.pointOnSegment(bentNet, bent, new Pt3(0, 0, 5));
+near('доля вдоль трубы с отводом считается по трубе', onBend.fraction, 0.25, 1e-6);
+
+var cutNode = NetworkEdit.splitSegment(bentNet, bent.index, new Pt3(0, 0, 5));
+near('длина делится по трубе: первая часть', bentNet.segments[0].length, 5.0, 1e-6);
+near('длина делится по трубе: вторая часть', bentNet.segments[1].length, 15.0, 1e-6);
+check('ломаная тоже поделилась',
+      bentNet.segments[0].polyline.length === 2 && bentNet.segments[1].polyline.length === 3,
+      'точек: ' + bentNet.segments[0].polyline.length
+      + ' и ' + bentNet.segments[1].polyline.length);
+check('узел разреза встал на саму трубу',
+      Math.abs(bentNet.nodes[cutNode].point3d.z - 5.0) < 1e-6
+      && Math.abs(bentNet.nodes[cutNode].point3d.x) < 1e-6,
+      'узел в ' + JSON.stringify(bentNet.nodes[cutNode].point3d));
+
+// У самого конца резать нечего: там уже есть узел.
+var endNet = branchNet().net;
+var atEnd = NetworkEdit.splitSegment(endNet, 0, new Pt3(0, 0, 0));
+check('разрез у самого конца возвращает существующий узел, а не плодит новый',
+      atEnd === endNet.segments[0].nodeA && endNet.segments.length === 2,
+      'узел ' + atEnd + ', участков ' + endNet.segments.length);
+
+// --- Т21: ручной выбор типоразмера клапана -----------------------------------
+// Типоразмер задаёт человек, программа не спорит с выбором, а считает, что он
+// даст: положение, Kv на нём и настоящий перепад. Видно цену решения.
+
+head('Т21: типоразмер клапана, заданный вручную');
+
+// 0,78 м³/ч при 0,12 бар — пример из паспорта, требуемый Kv 2,25.
+var handFlow = 0.78 * Water.Density;
+var handDrop = 12000.0;
+
+// Программа берёт самый узкий обычный клапан, у которого настройка попадает
+// в рабочую часть шкалы, — для Kv 2,25 это Ду15 на положении около 31.
+var byProgram = ValveSelector.select(handFlow, handDrop, 20.0);
+check('программа берёт самый узкий подходящий — Ду15',
+      byProgram.model && byProgram.model.dn === 15 && !byProgram.model.lowFlow,
+      byProgram.model ? byProgram.model.caption : 'не подобран');
+check('настройка в рабочей части шкалы', byProgram.position >= 10,
+      'положение ' + byProgram.position);
+check('и не помечает выбор ручным', !byProgram.byHand, 'помечен ручным');
+
+var byHand = ValveSelector.selectArticle(handFlow, handDrop, 20.0, 'VT.054.N.08');
+check('заданный типоразмер не подменяется', byHand.model.article === 'VT.054.N.08',
+      'получен ' + byHand.model.article);
+check('выбор помечен ручным', byHand.byHand, 'не помечен');
+near('требуемый Kv тот же, что и при автоподборе', byHand.requiredKv, byProgram.requiredKv, 1e-9);
+check('настройка пересчитана под него', byHand.position !== byProgram.position,
+      'настройка не изменилась: ' + byHand.position);
+near('фактический перепад согласован с фактическим Kv', byHand.actualDrop,
+     Balancing.dropForKv(handFlow, byHand.actualKv), 1.0);
+
+// Клапан, который не тянет: требуемый Kv выше, чем он даёт полностью открытым.
+var tooSmall = ValveSelector.selectArticle(3000, 10000, 40.0, 'VT.054.NLF.04');
+check('мелкий клапан открывается до конца', tooSmall.position === 99,
+      'настройка ' + tooSmall.position);
+check('и программа прямо говорит, что он не тянет',
+      tooSmall.note.indexOf('душит сильнее') >= 0, 'замечание: ' + tooSmall.note);
+check('перепад на нём выше требуемого', tooSmall.actualDrop > 10000,
+      'Δp ' + tooSmall.actualDrop);
+
+// Несуществующий артикул не должен ломать расчёт — молча возвращаемся к подбору.
+var unknown = ValveSelector.selectArticle(handFlow, handDrop, 20.0, 'VT.054.НЕТ.ТАКОГО');
+check('неизвестный артикул откатывается к автоподбору',
+      unknown.model && !unknown.byHand, 'получено ' + JSON.stringify(unknown.note));
+
+// --- сквозь весь расчёт ---
+
+var vNet = new HwNetwork();
+var vSrc = addNode(vNet, 0, 0, 0);
+var vSplit = addNode(vNet, 0, 0, 2);
+var vFarT = addNode(vNet, 0, 0, 40);
+var vFarR = addNode(vNet, 1, 0, 40);
+var vNearT = addNode(vNet, 10, 0, 10);
+var vNearR = addNode(vNet, 11, 0, 10);
+
+addSegment(vNet, vSrc, vSplit, 'supply', 2.0);
+addSegment(vNet, vSplit, vFarT, 'supply', 38.0);
+addSegment(vNet, vFarT, vFarR, 'link', 0.02);
+addSegment(vNet, vFarR, vSrc, 'return', 40.0);
+addSegment(vNet, vSplit, vNearT, 'supply', 8.0);
+addSegment(vNet, vNearT, vNearR, 'link', 0.02);
+var vNearReturn = addSegment(vNet, vNearR, vSrc, 'return', 10.0);
+
+makeZone(vNet);
+vNet.sourceNodes.push(vSrc);
+Calc.run(vNet, baseSettings());
+
+var shortRing = null;
+for (var vr = 0; vr < vNet.rings.length; vr++) {
+    if (vNet.rings[vr].needsValve) shortRing = vNet.rings[vr];
+}
+
+check('кольцу с невязкой клапан подобран', shortRing && shortRing.valve && shortRing.valve.model,
+      'клапан не подобран');
+
+if (shortRing && shortRing.valve.model) {
+    var auto = shortRing.valve.model.article;
+    var host = vNet.segments[shortRing.valveSegment];
+
+    check('клапан стоит на участке кольца', !!host && !!host.valve, 'клапана на участке нет');
+    check('и подбор считается автоматическим', !host.valve.chosenArticle,
+          'артикул уже закреплён');
+
+    // Закрепляем другой типоразмер и пересчитываем.
+    host.valve.chosenArticle = 'VT.054.N.09';
+    host.valve.automatic = false;
+    Calc.run(vNet, baseSettings());
+
+    var again = null;
+    for (vr = 0; vr < vNet.rings.length; vr++) {
+        if (vNet.rings[vr].needsValve) again = vNet.rings[vr];
+    }
+
+    check('расчёт взял заданный типоразмер, а не свой',
+          again && again.valve.model && again.valve.model.article === 'VT.054.N.09',
+          'получен ' + (again && again.valve.model ? again.valve.model.article : '—'));
+    check('заданный типоразмер отличается от подобранного', auto !== 'VT.054.N.09',
+          'совпали, проверка ничего не показывает');
+    check('выбор помечен ручным для подсветки строки',
+          vNet.segments[again.valveSegment].valve.chosenArticle === 'VT.054.N.09',
+          'пометки нет');
+
+    // Пересчёт не должен терять решение человека.
+    Calc.run(vNet, baseSettings());
+    check('повторный расчёт решение не стирает',
+          vNet.segments[again.valveSegment].valve.chosenArticle === 'VT.054.N.09',
+          'артикул потерялся');
+
+    // Возврат к автоподбору.
+    vNet.segments[again.valveSegment].valve.chosenArticle = null;
+    Calc.run(vNet, baseSettings());
+
+    var back = null;
+    for (vr = 0; vr < vNet.rings.length; vr++) {
+        if (vNet.rings[vr].needsValve) back = vNet.rings[vr];
+    }
+    check('снятие ручного выбора возвращает автоподбор',
+          back && back.valve.model && back.valve.model.article === auto,
+          'получен ' + (back && back.valve.model ? back.valve.model.article : '—'));
+}
+
+// --- Т22: каталог Ридан MVT-R2 -----------------------------------------------
+// Числа из технического описания RC.HE.88.03, 2024, таблица значений Kv
+// при различных настройках. Шкала 0,0…8,0 десятыми, 8,0 — это Kvs.
+
+head('Т22: настроечная таблица Ридан MVT-R2 перенесена без искажений');
+
+var rLF = ValveCatalog.byArticle('003Z4060R');
+var r15 = ValveCatalog.byArticle('003Z4061R');
+var r20 = ValveCatalog.byArticle('003Z4062R');
+var r25 = ValveCatalog.byArticle('003Z4063R');
+var r32 = ValveCatalog.byArticle('003Z4064R');
+var r40 = ValveCatalog.byArticle('003Z4065R');
+var r50 = ValveCatalog.byArticle('003Z4066R');
+
+check('в каталоге две фирмы', ValveCatalog.Brands.length === 2
+      && ValveCatalog.Brands.indexOf('Ридан') >= 0, ValveCatalog.Brands.join(', '));
+check('у Ридана семь типоразмеров', ValveCatalog.ofBrand('Ридан').length === 7,
+      'штук: ' + ValveCatalog.ofBrand('Ридан').length);
+check('в ряду 81 положение от 0,0 до 8,0',
+      r25.positions.length === 81 && r25.positions[80] === 8, 'ряд другой');
+
+near('DN20 на настройке 3,7', ValveCatalog.kvAt(r20, 3.7), 2.22, 0.001);
+near('DN25 на настройке 2,9', ValveCatalog.kvAt(r25, 2.9), 2.33, 0.001);
+near('DN32 на настройке 5,0', ValveCatalog.kvAt(r32, 5.0), 11.8, 0.001);
+near('DN50 на настройке 0,1', ValveCatalog.kvAt(r50, 0.1), 0.58, 0.001);
+near('DN15 на настройке 6,6', ValveCatalog.kvAt(r15, 6.6), 4.43, 0.001);
+near('Low Flow на настройке 7,0', ValveCatalog.kvAt(rLF, 7.0), 2.00, 0.001);
+
+// Kvs — последняя строка таблицы, она же в номенклатуре.
+near('Kvs Low Flow', rLF.maxKv, 3.07, 0.001);
+near('Kvs DN15', r15.maxKv, 4.99, 0.001);
+near('Kvs DN20', r20.maxKv, 5.82, 0.001);
+near('Kvs DN25', r25.maxKv, 9.82, 0.001);
+near('Kvs DN32', r32.maxKv, 15.87, 0.001);
+near('Kvs DN40', r40.maxKv, 22.98, 0.001);
+near('Kvs DN50', r50.maxKv, 32.24, 0.001);
+
+// Ноль на этой шкале означает полное закрытие, мёртвой зоны нет.
+near('ноль — полное закрытие', ValveCatalog.kvAt(r25, 0), 0.0, 1e-9);
+check('мёртвой зоны у Ридана нет', r25.deadBand === 0, 'зона ' + r25.deadBand);
+check('а у VALTEC есть', ValveCatalog.byArticle('VT.054.N.05').deadBand === 3,
+      'зона другая');
+
+// Шаг шкалы свой у каждой фирмы: у VALTEC целые, у Ридана десятые.
+near('настройка Ридана округляется до десятых',
+     ValveCatalog.roundPosition(r25, 3.764), 3.8, 1e-9);
+near('настройка VALTEC округляется до целых',
+     ValveCatalog.roundPosition(ValveCatalog.byArticle('VT.054.N.05'), 13.861), 14, 1e-9);
+check('и записывается так, как читается на рукоятке',
+      ValveCatalog.formatPosition(r25, 3.8) === '3,8'
+      && ValveCatalog.formatPosition(ValveCatalog.byArticle('VT.054.N.05'), 14) === '14',
+      'получено ' + ValveCatalog.formatPosition(r25, 3.8));
+
+// --- Т23: примеры подбора из паспорта Ридан ----------------------------------
+
+head('Т23: примеры подбора из технического описания Ридан');
+
+function ridanSetting(flowM3h, dropBar, model) {
+    var kv = flowM3h / Math.sqrt(dropBar);
+    return ValveCatalog.roundPosition(model, ValveCatalog.positionFor(model, kv));
+}
+
+// Пример 1: ΔP 3 кПа, расход 0,4 м³/ч, стояк 25 мм → настройка 2,9.
+near('пример 1: 0,4/√0,03 на DN25', ridanSetting(0.4, 0.03, r25), 2.9, 1e-9);
+
+// Пример 2: 0,8 м³/ч при 13 кПа, стояк 20 мм → настройка 3,7.
+near('пример 2: 0,8/√0,13 на DN20', ridanSetting(0.8, 0.13, r20), 3.7, 1e-9);
+
+/*
+    Пример 3 паспорта (0,8/√0,12 на DN20) объявляет настройку 3,9, но по его же
+    таблице это 3,8: требуемый Kv 2,309 лежит между 3,7 (2,22) и 3,8 (2,36),
+    а 3,9 даёт уже 2,49. Тот же Kv в примере 1 отработан верно, значит дело
+    в самом примере, а не в методике. Проверяем по таблице.
+*/
+near('пример 3 считается по таблице, а не по опечатке', ridanSetting(0.8, 0.12, r20), 3.8, 1e-9);
+check('соседняя настройка 3,9 действительно дальше от требуемого Kv',
+      Math.abs(ValveCatalog.kvAt(r20, 3.9) - 0.8 / Math.sqrt(0.12))
+      > Math.abs(ValveCatalog.kvAt(r20, 3.8) - 0.8 / Math.sqrt(0.12)),
+      'ближе оказалась 3,9');
+
+// --- Т24: подбор идёт в пределах выбранной фирмы ------------------------------
+
+head('Т24: фирма клапанов из исходных данных');
+
+var brandFlow = 0.78 * Water.Density;
+var brandDrop = 12000.0;
+
+var valtecPick = ValveSelector.select(brandFlow, brandDrop, 20.0, 'VALTEC');
+var ridanPick = ValveSelector.select(brandFlow, brandDrop, 20.0, 'Ридан');
+
+check('при VALTEC подбирается VALTEC', valtecPick.model.brand === 'VALTEC',
+      valtecPick.model.caption);
+check('при Ридане подбирается Ридан', ridanPick.model.brand === 'Ридан',
+      ridanPick.model.caption);
+near('требуемый Kv от фирмы не зависит', ridanPick.requiredKv, valtecPick.requiredKv, 1e-9);
+check('настройка у каждой своя', ridanPick.position !== valtecPick.position,
+      'совпали: ' + ridanPick.position);
+near('фактический перепад согласован с фактическим Kv', ridanPick.actualDrop,
+     Balancing.dropForKv(brandFlow, ridanPick.actualKv), 1.0);
+
+// Ручной выбор фирме не подчиняется: артикул задан, спорить не о чем.
+var crossBrand = ValveSelector.selectArticle(brandFlow, brandDrop, 20.0,
+                                             '003Z4063R', 'VALTEC');
+check('ручной артикул берётся и из другой фирмы',
+      crossBrand.model.article === '003Z4063R' && crossBrand.byHand,
+      'получен ' + crossBrand.model.article);
+
+// Предел перепада у фирм разный и берётся из их же документов.
+check('у Ридана предел перепада 1,5 бар', Math.abs(r25.maxDrop - 150000) < 1,
+      'получено ' + r25.maxDrop);
+check('у VALTEC предел 500 кПа',
+      Math.abs(ValveCatalog.byArticle('VT.054.N.05').maxDrop - 500000) < 1,
+      'получено ' + ValveCatalog.byArticle('VT.054.N.05').maxDrop);
+
+// --- Т25: гидравлика по кольцам ----------------------------------------------
+// Таблица показывает, из чего сложились потери. Значит она обязана сходиться
+// и сама с собой, и с расчётом: нарастающая длина с длиной кольца,
+// нарастающий перепад с перепадом кольца, R·L с потерями по длине.
+
+head('Т25: таблица гидравлики по кольцам');
+
+var hNet = new HwNetwork();
+var hSrc = addNode(hNet, 0, 0, 0);
+var hSplit = addNode(hNet, 0, 0, 2);
+var hFarT = addNode(hNet, 0, 0, 40);
+var hFarR = addNode(hNet, 1, 0, 40);
+var hNearT = addNode(hNet, 10, 0, 10);
+var hNearR = addNode(hNet, 11, 0, 10);
+
+addSegment(hNet, hSrc, hSplit, 'supply', 2.0);
+addSegment(hNet, hSplit, hFarT, 'supply', 38.0);
+addSegment(hNet, hFarT, hFarR, 'link', 0.02);
+addSegment(hNet, hFarR, hSrc, 'return', 40.0);
+addSegment(hNet, hSplit, hNearT, 'supply', 8.0);
+addSegment(hNet, hNearT, hNearR, 'link', 0.02);
+addSegment(hNet, hNearR, hSrc, 'return', 10.0);
+
+makeZone(hNet);
+hNet.sourceNodes.push(hSrc);
+
+var hApp = {
+    network: hNet, settings: baseSettings(), selection: null,
+    accepts: function () { return true; },
+    acceptsZone: function () { return true; },
+    acceptsZoneKey: function () { return true; },
+    afterEdit: function () { }, select: function () { }
+};
+
+Calc.run(hApp.network, hApp.settings);
+
+check('вкладка стоит сразу за «Участками»',
+      Tables.Names.indexOf('hydraulics') === Tables.Names.indexOf('segments') + 1,
+      'порядок: ' + Tables.Names.join(', '));
+check('и называется по делу', Tables.titleOf('hydraulics') === 'Гидравлика по кольцам',
+      Tables.titleOf('hydraulics'));
+
+var hLines = Tables.toText('hydraulics', hApp).split('\n');
+var hHead = hLines[0].split('\t');
+check('в таблице 25 столбцов', hHead.length === 25, 'столбцов: ' + hHead.length);
+
+// Каждое кольцо заканчивается строкой итога.
+var totals = 0;
+for (var hi = 1; hi < hLines.length; hi++) {
+    if (hLines[hi].indexOf('Итог') === 0) totals++;
+}
+check('у каждого кольца своя строка итога', totals === hNet.rings.length,
+      'итогов ' + totals + ' при ' + hNet.rings.length + ' кольцах');
+
+// Строки первого кольца: нарастающие величины обязаны сойтись с кольцом.
+var firstRing = hNet.rings[0];
+var sumLength = 0.0;
+var sumDrop = 0.0;
+for (var hk = 0; hk < firstRing.segments.length; hk++) {
+    var hs = hNet.segments[firstRing.segments[hk]];
+    sumLength += hs.length;
+    sumDrop += hs.pressureDrop;
+}
+
+near('сумма длин участков равна длине кольца', sumLength, firstRing.length, 1e-6);
+near('сумма перепадов равна перепаду кольца', sumDrop, firstRing.pressureDrop, 1e-6);
+
+// Разбор одного участка: удельное сопротивление на метр, умноженное на длину,
+// обязано дать потери по длине, а те с местными — перепад участка.
+var probe = hNet.segments[firstRing.segments[1]];
+var probeDetail = Hydraulics.detail(probe.flow, probe.length, probe.innerDiameter,
+                                    probe.material, hApp.settings);
+
+near('R·L даёт потери по длине', probeDetail.perMetre * probe.length, probeDetail.linear, 1e-9);
+near('местные — доля от линейных',
+     probeDetail.local, probeDetail.linear * hApp.settings.localPressureFactor, 1e-9);
+near('линейные с местными дают перепад участка',
+     probeDetail.linear + probeDetail.local, probe.pipeDrop, 1e-9);
+near('и это тот же перепад, что в расчёте',
+     probeDetail.total,
+     Hydraulics.pressureDrop(probe.flow, probe.length, probe.innerDiameter,
+                             probe.material, hApp.settings), 1e-12);
+
+check('режим течения определён', probeDetail.reynolds > 0,
+      'Re = ' + probeDetail.reynolds);
+check('и согласован с границей ламинарности',
+      probeDetail.laminar === (probeDetail.reynolds < Hydraulics.LaminarLimit),
+      'Re = ' + probeDetail.reynolds + ', режим ' + probeDetail.laminar);
+
+// --- Т26: таблица подбора клапанов -------------------------------------------
+// Ради неё всё и затевалось: читатель должен пересчитать Kv = Q/√Δp глазами.
+
+head('Т26: таблица подбора клапанов');
+
+check('вкладка идёт следом за гидравликой',
+      Tables.Names.indexOf('valveCalc') === Tables.Names.indexOf('hydraulics') + 1,
+      'порядок: ' + Tables.Names.join(', '));
+
+var vLines = Tables.toText('valveCalc', hApp).split('\n');
+var vHead = vLines[0].split('\t');
+check('в таблице 22 столбца', vHead.length === 22, 'столбцов: ' + vHead.length);
+check('строк столько же, сколько колец', vLines.length - 1 === hNet.rings.length,
+      'строк ' + (vLines.length - 1));
+
+function cell(line, name) {
+    var at = vHead.indexOf(name);
+    return line.split('\t')[at];
+}
+
+function asNumber(text) {
+    return parseFloat(String(text).replace(',', '.'));
+}
+
+// Берём строку кольца, которому клапан понадобился.
+var working = null;
+for (var vi = 1; vi < vLines.length; vi++) {
+    if (cell(vLines[vi], 'Kv = Q/√Δp') !== '—') working = vLines[vi];
+}
+
+check('нашлось кольцо с подбором', !!working, 'все кольца увязались сами');
+
+if (working) {
+    var q = asNumber(cell(working, 'Q, м³/ч'));
+    var bar = asNumber(cell(working, 'То же, бар'));
+    var kvShown = asNumber(cell(working, 'Kv = Q/√Δp'));
+
+    check('разрядов хватает, чтобы перепад не схлопнулся в ноль', bar > 0,
+          'Δp показан как ' + cell(working, 'То же, бар'));
+    near('Kv пересчитывается из показанных же чисел', q / Math.sqrt(bar), kvShown,
+         Math.max(0.02, kvShown * 0.02));
+
+    var ringDrop = asNumber(cell(working, 'Δp кольца (трубы), кПа'));
+    var worstDrop = asNumber(cell(working, 'Δp худшего кольца, кПа'));
+    var wantDrop = asNumber(cell(working, 'Требуемый Δp клапана, кПа'));
+
+    near('требуемый перепад — это разность с худшим кольцом',
+         worstDrop - ringDrop, wantDrop, 0.002);
+
+    check('расчётное положение показано точнее принятого',
+          cell(working, 'Положение расчётное').indexOf(',') > 0,
+          'показано ' + cell(working, 'Положение расчётное'));
+    check('шаг шкалы назван', cell(working, 'Шаг шкалы') !== '—',
+          'шага нет');
+    check('фирма названа', cell(working, 'Фирма') !== '—', 'фирмы нет');
+}
+
+// --- Т27: трение стальных труб по Шевелёву ------------------------------------
+// Стальные и чугунные считаются как НЕНОВЫЕ — обросшие отложениями.
+// Исходные формулы Ф. А. Шевелёва даны для удельных потерь:
+//     i = 0,00107·v²/d^1,3                      при v ≥ 1,2 м/с
+//     i = 0,000912·v²/d^1,3·(1 + 0,867/v)^0,3   при v < 1,2 м/с
+//
+// В РАСЧЁТ они идут не напрямую, а через эквивалентную шероховатость заросшей
+// трубы: из квадратичной ветви выводится k(d), и дальше работает тот же Альтшуль,
+// что и у всех прочих материалов. Причина — в переходной ветви: множитель
+// (1 + 0,867/v)^0,3 писался для водопроводных скоростей около метра в секунду,
+// а при циркуляционных 0,03 м/с он разгоняет λ до 0,13, чего на диаграмме Муди
+// при таком Re нет вовсе. Рядом с ламинарной веткой это давало разрыв в 4,6 раза,
+// на котором проверочный расчёт зацикливался.
+//
+// Отсюда и состав проверок: в квадратичной области расчёт обязан совпасть
+// с Шевелёвым, в переходной — обязан разойтись с ним вниз и остаться в пределах
+// диаграммы Муди. Сама i-форма сохранена в Hydraulics.shevelev как справочная,
+// и её переписанность с бумаги проверяется отдельно.
+
+head('Т27: стальные трубы по Шевелёву, неновые');
+
+function shevelevI(v, d) {
+    return v >= 1.2
+        ? 0.00107 * v * v / Math.pow(d, 1.3)
+        : 0.000912 * v * v / Math.pow(d, 1.3) * Math.pow(1 + 0.867 / v, 0.3);
+}
+
+function lambdaFromI(v, d) {
+    return shevelevI(v, d) * d * 2 * Water.G / (v * v);
+}
+
+var steelD = 0.0359;
+var steelSettings = baseSettings();
+var steelName = 'Сталь ВГП ГОСТ 3262-75';
+
+function steelLambda(v, d) {
+    var flow = v * Math.PI * d * d / 4 * Water.Density * 3600;
+    return Hydraulics.detail(flow, 1.0, d, steelName, steelSettings).friction;
+}
+
+// Справочная i-форма переписана в λ верно — это проверка самой записи с бумаги.
+[0.2, 0.5, 1.0, 1.5, 2.0].forEach(function (v) {
+    near('shevelev(' + v + ' м/с) совпадает с i-формой',
+         Hydraulics.shevelev(v, steelD), lambdaFromI(v, steelD), 1e-9);
+});
+
+/*
+    Эквивалентная шероховатость. Не одно число, а зависимость от диаметра:
+    чем труба толще, тем меньше относительная роль отложений. Числа получаются
+    из приравнивания квадратичных ветвей, их и закрепляем — чтобы вывод k(d)
+    нельзя было переписать молча.
+*/
+[[0.0359, 2.577], [0.1, 2.100], [0.3, 1.686]].forEach(function (pair) {
+    near('k заросшей трубы при Двн ' + (pair[0] * 1000).toFixed(1) + ' мм',
+         Hydraulics.shevelevRoughness(pair[0]), pair[1], 0.002);
+});
+
+check('с ростом диаметра эквивалентная шероховатость падает',
+      Hydraulics.shevelevRoughness(0.0359) > Hydraulics.shevelevRoughness(0.1)
+      && Hydraulics.shevelevRoughness(0.1) > Hydraulics.shevelevRoughness(0.3),
+      'зависимость от диаметра не та');
+
+/*
+    Квадратичная область: здесь k подобрана ровно так, чтобы ответ совпал
+    с Шевелёвым. Остаточные доли процента — от слагаемого 68/Re у Альтшуля,
+    которое в квадратичной области мало, но не ноль.
+*/
+[[1.5, 0.0359], [1.5, 0.1], [2.5, 0.0359], [2.5, 0.3]].forEach(function (pair) {
+    var got = steelLambda(pair[0], pair[1]);
+    var want = lambdaFromI(pair[0], pair[1]);
+    check('в квадратичной области λ совпадает с Шевелёвым: v = ' + pair[0]
+              + ', Двн ' + (pair[1] * 1000).toFixed(1) + ' мм',
+          Math.abs(got - want) / want < 0.005,
+          'расчёт ' + got.toFixed(5) + ', Шевелёв ' + want.toFixed(5));
+});
+
+/*
+    Переходная область: расхождение здесь не дефект, а принятое решение,
+    и оно закреплено проверкой. Расчёт обязан дать МЕНЬШЕ, чем экстраполяция
+    Шевелёва, и не больше чем в полтора раза меньше — иначе расхождение
+    перестало бы быть ценой отказа от экстраполяции и стало бы ошибкой.
+*/
+[0.2, 0.5, 1.0].forEach(function (v) {
+    var got = steelLambda(v, steelD);
+    var byShevelev = lambdaFromI(v, steelD);
+    check('в переходной области расчёт ниже экстраполяции Шевелёва: v = ' + v,
+          got < byShevelev && got > byShevelev / 1.5,
+          'расчёт ' + got.toFixed(5) + ', Шевелёв ' + byShevelev.toFixed(5)
+              + ', отношение ' + (byShevelev / got).toFixed(3));
+});
+
+/*
+    Главное, ради чего всё и переделано: λ обязана остаться в пределах
+    диаграммы Муди на всём рабочем диапазоне, включая циркуляционные скорости,
+    где потери считаются при расходе в несколько литров в час.
+*/
+[0.01, 0.03, 0.1, 0.3, 1.0, 3.0].forEach(function (v) {
+    var got = steelLambda(v, steelD);
+    var reynolds = Hydraulics.reynolds(v, steelD);
+    var ceiling = reynolds < Hydraulics.LaminarLimit ? 1.0 : 0.12;
+    check('λ в пределах диаграммы Муди при v = ' + v + ' м/с',
+          got > 0 && got < ceiling,
+          'λ = ' + got.toFixed(4) + ' при Re = ' + reynolds.toFixed(0));
+});
+
+/*
+    Переходная область Re 2300…4000: стык ламинарной ветви и турбулентной.
+
+    Раньше здесь был разрыв: ниже 2300 работало 64/Re, выше — сразу Альтшуль,
+    и труба при Re 2290 оказывалась вдвое легче такой же при Re 2310. Для сетей
+    ГВС это не редкий случай, а основной — при циркуляционных расходах в этой
+    полосе сидит половина участков, — и на этом разрыве проверочный расчёт
+    не мог сойтись: невязка упиралась в скачок.
+
+    Теперь ветви сшиты ступенькой 3w² − 2w³. Проверяется именно то, ради чего
+    она взята: непрерывность в обоих концах полосы, отсутствие ступеней внутри
+    и гладкость — нулевая производная на стыках, иначе Ньютон спотыкается
+    об излом не хуже, чем о разрыв.
+*/
+
+function lambdaAtRe(reynolds, d) {
+    return steelLambda(reynolds * Water.Viscosity / d, d);
+}
+
+var lowEdge = Hydraulics.LaminarLimit;
+var highEdge = Hydraulics.TurbulentStart;
+
+near('на нижнем краю полосы λ равна ламинарной 64/Re',
+     lambdaAtRe(lowEdge, steelD), 64.0 / lowEdge, 1e-6);
+
+near('и справа от края остаётся той же',
+     lambdaAtRe(lowEdge * 1.001, steelD), 64.0 / lowEdge, 0.0005);
+
+var byAltshulAtHigh = Hydraulics.frictionFactor(
+    highEdge, Hydraulics.shevelevRoughness(steelD), steelD);
+
+near('на верхнем краю полосы λ равна турбулентной',
+     lambdaAtRe(highEdge, steelD), byAltshulAtHigh, 1e-9);
+
+near('и слева от края она уже практически та же',
+     lambdaAtRe(highEdge * 0.999, steelD), byAltshulAtHigh, 0.0005);
+
+/*
+    Внутри полосы — ни одной ступени. Берётся сто точек; соседние отличаются
+    по расходу на доли процента, значит и λ обязана меняться на доли процента.
+    Ступень в разы — это и есть то, на чём решатель зацикливался.
+*/
+var worstStep = 0.0;
+var previous = lambdaAtRe(lowEdge, steelD);
+
+for (var step = 1; step <= 100; step++) {
+    var atRe = lowEdge + (highEdge - lowEdge) * step / 100.0;
+    var now = lambdaAtRe(atRe, steelD);
+    var relative = Math.abs(now - previous) / previous;
+
+    if (relative > worstStep) worstStep = relative;
+    previous = now;
+}
+
+check('внутри переходной полосы λ идёт без ступеней',
+      worstStep < 0.02,
+      'наибольший шаг ' + (worstStep * 100).toFixed(2) + ' % на сотой доле полосы');
+
+/*
+    Гладкость на стыках. Производная ступеньки в концах нулевая, поэтому λ
+    подходит к границе с той же крутизной, с какой идёт сама ламинарная ветвь:
+    отношение приращений по обе стороны от края должно быть около единицы.
+*/
+function slopeNear(atRe, d) {
+    var h = 1.0;
+    return (lambdaAtRe(atRe + h, d) - lambdaAtRe(atRe - h, d)) / (2.0 * h);
+}
+
+var laminarSlope = -64.0 / (lowEdge * lowEdge);
+check('на нижнем краю λ входит в полосу без излома',
+      Math.abs(slopeNear(lowEdge, steelD) - laminarSlope) < Math.abs(laminarSlope) * 0.05,
+      'наклон ' + slopeNear(lowEdge, steelD).toExponential(2)
+          + ' против ламинарного ' + laminarSlope.toExponential(2));
+
+// В полосе λ лежит между ветвями: ни ниже ламинарной, ни выше турбулентной.
+var middle = (lowEdge + highEdge) / 2.0;
+var middleLambda = lambdaAtRe(middle, steelD);
+var middleTurbulent = Hydraulics.frictionFactor(
+    middle, Hydraulics.shevelevRoughness(steelD), steelD);
+
+check('в середине полосы λ лежит между ветвями',
+      middleLambda > 64.0 / middle * 0.999 && middleLambda < middleTurbulent * 1.001,
+      'λ ' + middleLambda.toFixed(4) + ', ламинарная ' + (64.0 / middle).toFixed(4)
+          + ', турбулентная ' + middleTurbulent.toFixed(4));
+
+// Ниже 2300 не изменилось ничего: там по-прежнему чистое 64/Re, как в плагине.
+[500, 1000, 1800, 2299].forEach(function (atRe) {
+    near('ниже границы по-прежнему чистое 64/Re: Re = ' + atRe,
+         lambdaAtRe(atRe, steelD), 64.0 / atRe, 1e-9);
+});
+
+// Обе ветви сходятся на границе 1,2 м/с — там их и сшивали коэффициентами.
+var below = Hydraulics.shevelev(1.1999, steelD);
+var above = Hydraulics.shevelev(1.2, steelD);
+check('ветви Шевелёва сходятся на границе 1,2 м/с',
+      Math.abs(below - above) / above < 0.005,
+      'ниже ' + below + ', выше ' + above);
+
+// Выше 1,2 м/с от скорости уже ничего не зависит: квадратичная область.
+near('в квадратичной области λ от скорости не зависит',
+     Hydraulics.shevelev(1.5, steelD), Hydraulics.shevelev(3.0, steelD), 1e-12);
+
+// Ниже границы поправка растёт: чем медленнее, тем больше относительные потери.
+check('ниже 1,2 м/с λ растёт с падением скорости',
+      Hydraulics.shevelev(0.2, steelD) > Hydraulics.shevelev(0.5, steelD)
+      && Hydraulics.shevelev(0.5, steelD) > Hydraulics.shevelev(1.0, steelD),
+      'поправка не работает');
+
+// --- кому какой закон ---
+
+function lawFor(material, d) {
+    var flow = 0.5 * Math.PI * d * d / 4 * Water.Density * 3600;
+    return Hydraulics.detail(flow, 1.0, d, material, steelSettings).law;
+}
+
+check('чёрная сталь — Шевелёв',
+      lawFor('Сталь ВГП ГОСТ 3262-75', 0.0359) === 'Шевелёв, неновые',
+      lawFor('Сталь ВГП ГОСТ 3262-75', 0.0359));
+check('оцинкованная — тоже Шевелёв',
+      lawFor('Сталь ВГП оцинкованная ГОСТ 3262-75', 0.0359) === 'Шевелёв, неновые',
+      lawFor('Сталь ВГП оцинкованная ГОСТ 3262-75', 0.0359));
+check('электросварная — тоже Шевелёв',
+      lawFor('Сталь электросварная ГОСТ 10704-91', 0.1) === 'Шевелёв, неновые',
+      lawFor('Сталь электросварная ГОСТ 10704-91', 0.1));
+
+/*
+    Нержавейка отложениями не обрастает, хотя слово «сталь» в её имени есть.
+    Проверка на «нержав» стоит в опознании первой именно поэтому: без неё
+    нержавеющая труба считалась бы как заросшая чёрная.
+*/
+check('нержавейка остаётся на Альтшуле',
+      lawFor('Нержавеющая сталь AISI 304 пресс', 0.032) === 'Альтшуль',
+      lawFor('Нержавеющая сталь AISI 304 пресс', 0.032));
+check('медь остаётся на Альтшуле',
+      lawFor('Медь EN 1057', 0.032) === 'Альтшуль', lawFor('Медь EN 1057', 0.032));
+check('полипропилен остаётся на Альтшуле',
+      lawFor('Полипропилен PP-R PN25 стекловолокно', 0.0362) === 'Альтшуль',
+      lawFor('Полипропилен PP-R PN25 стекловолокно', 0.0362));
+
+// Ламинарный режим ни от шероховатости, ни от состояния трубы не зависит.
+var slow = Hydraulics.detail(2.0, 1.0, 0.0359, 'Сталь ВГП ГОСТ 3262-75', steelSettings);
+check('в ламинарном режиме и сталь идёт по 64/Re',
+      slow.law === 'ламинарный, 64/Re', slow.law);
+near('и λ равна 64/Re', slow.friction, 64.0 / slow.reynolds, 1e-12);
+
+/*
+    Шероховатость показывается ровно там, где участвует в расчёте, и показывается
+    та самая, по которой считали. У стали это выведенная k(d), а не табличная:
+    иначе в таблице гидравлики стояло бы одно число, а в расчёт шло бы другое.
+*/
+var steelDetail = Hydraulics.detail(
+    0.5 * Math.PI * steelD * steelD / 4 * Water.Density * 3600,
+    1.0, steelD, steelName, steelSettings);
+check('у стали показана выведенная шероховатость, а не табличная',
+      steelDetail.usesRoughness
+      && Math.abs(steelDetail.roughness - Hydraulics.shevelevRoughness(steelD)) < 1e-9
+      && Math.abs(steelDetail.roughness - steelSettings.roughnessMm) > 1.0,
+      'k показан как ' + steelDetail.roughness);
+
+var laminarSteel = Hydraulics.detail(2.0, 1.0, steelD, steelName, steelSettings);
+check('в ламинарном режиме шероховатость не показывается вовсе',
+      !laminarSteel.usesRoughness && laminarSteel.roughness === 0,
+      'k показан как ' + laminarSteel.roughness);
+
+// Неновая сталь обязана считаться тяжелее новой — за это k и выводилась.
+var byAltshul = Hydraulics.frictionFactor(steelDetail.reynolds, 0.2, steelD);
+check('неновая сталь даёт больше потерь, чем новая по Альтшулю',
+      steelDetail.friction > byAltshul * 1.5,
+      'неновая ' + steelDetail.friction.toFixed(4) + ', новая ' + byAltshul.toFixed(4));
+
+// --- Т28: проверочный расчёт, распределение расхода ---------------------------
+/*
+    Вкладка «Проверочный расчёт» отвечает на два вопроса: как разойдётся
+    по кольцам расход, заданный на ИТП, и что будет, если балансировочных
+    клапанов не ставить вовсе.
+
+    Задача обратная основному расчёту. Основной ищет расходы, при которых
+    у потребителя получается 60 °C, и под них подбирает клапаны. Этот —
+    берёт готовую сеть и заданный расход и ищет, как вода разойдётся сама:
+    по кольцам с общим перепадом. Решается Ньютоном по контурным расходам.
+
+    Сеть нарочно перекошенная: дальнее кольцо 60 м, ближнее 6 м. Без клапанов
+    вода пойдёт в ближнее, дальнее останется недогретым — это и надо показать.
+*/
+
+head('Т28: проверочный расчёт, распределение расхода по кольцам');
+
+var proofNet = new HwNetwork();
+var pHub = addNode(proofNet, 0, 0, 0);
+var pTee = addNode(proofNet, 2, 0, 0);
+var pFarT = addNode(proofNet, 2, 0, 60);
+var pFarR = addNode(proofNet, 3, 0, 60);
+var pNearT = addNode(proofNet, 14, 0, 6);
+var pNearR = addNode(proofNet, 15, 0, 6);
+
+addSegment(proofNet, pHub, pTee, 'supply', 2.0);
+addSegment(proofNet, pTee, pFarT, 'supply', 60.0);
+addSegment(proofNet, pFarT, pFarR, 'link', 0.02);
+addSegment(proofNet, pFarR, pHub, 'return', 62.0);
+addSegment(proofNet, pTee, pNearT, 'supply', 6.0);
+addSegment(proofNet, pNearT, pNearR, 'link', 0.02);
+addSegment(proofNet, pNearR, pHub, 'return', 8.0);
+
+makeZone(proofNet);
+proofNet.sourceNodes.push(pHub);
+
+var proofSettings = baseSettings();
+Calc.run(proofNet, proofSettings);
+
+check('сеть собралась в два кольца', proofNet.rings.length === 2,
+      'колец: ' + proofNet.rings.length);
+
+/*
+    Снимок основного расчёта. Проверочный считает по той же сети, подменяя
+    расходы, температуры и теплопотери, — и обязан вернуть всё как было.
+    Иначе таблицы участков и гидравлики начали бы показывать теоретические
+    числа вместо расчётных, причём молча.
+*/
+function proofSnapshot(net) {
+    var parts = [];
+    for (var i = 0; i < net.segments.length; i++) {
+        var s = net.segments[i];
+        parts.push([s.flow, s.flowDirection, s.velocity, s.pipeDrop, s.valveDrop,
+                    s.pressureDrop, s.heatLoss, s.temperatureIn, s.temperatureOut,
+                    s.valve ? s.valve.actualKv : -1,
+                    s.valve ? s.valve.position : -1].join('|'));
+    }
+    for (i = 0; i < net.nodes.length; i++)
+        parts.push('n' + net.nodes[i].temperature);
+    for (i = 0; i < net.rings.length; i++)
+        parts.push('r' + net.rings[i].flow + '|' + net.rings[i].pipeDrop);
+    return parts.join(';');
+}
+
+var beforeProof = proofSnapshot(proofNet);
+var proofZone = proofNet.zones[0];
+var proofDesign = ProofSolver.designFlow(proofNet, proofZone);
+
+near('расчётный расход зоны равен сумме расходов колец', proofDesign,
+     proofNet.rings[0].flow + proofNet.rings[1].flow, 1e-9);
+
+var byDesign = ProofSolver.run(proofNet, proofSettings, {});
+
+check('основной расчёт после прогона не тронут',
+      proofSnapshot(proofNet) === beforeProof, 'числа основного расчёта изменились');
+
+check('зона попала в результат', byDesign.zones.length === 1,
+      'зон в результате: ' + byDesign.zones.length);
+
+var pz = byDesign.zones[0];
+
+check('без заданного расхода берётся расчётный', !pz.given && pz.total === proofDesign,
+      'взято ' + pz.total + ' вместо ' + proofDesign);
+
+check('распределение сошлось и с клапанами, и без них',
+      pz.withValves.converged && pz.without.converged,
+      'с клапанами ' + pz.withValves.converged + ' за ' + pz.withValves.steps
+          + ' шагов, без клапанов ' + pz.without.converged + ' за '
+          + pz.without.steps + ' шагов');
+
+check('замечаний о несходимости нет', byDesign.notes.length === 0,
+      byDesign.notes.join(' / '));
+
+/* --- сумма расходов и доли --- */
+
+function sumFlows(run) {
+    var s = 0.0;
+    for (var i = 0; i < run.rings.length; i++) s += run.rings[i].flow;
+    return s;
+}
+
+near('с клапанами расходы колец дают заданный расход на ИТП',
+     sumFlows(pz.withValves), pz.total, pz.total * 1e-6);
+near('без клапанов — тоже: вода никуда не девается',
+     sumFlows(pz.without), pz.total, pz.total * 1e-6);
+
+near('доли с клапанами в сумме дают единицу',
+     pz.withValves.rings[0].share + pz.withValves.rings[1].share, 1.0, 1e-9);
+
+/* --- перепад по кольцам при найденном расходе --- */
+/*
+    Смысл потокораспределения: вода распределяется так, чтобы перепад
+    по всем параллельным кольцам стал одинаковым. Это и есть критерий
+    сходимости, записанный с другой стороны.
+*/
+function dropsEqual(run) {
+    var a = run.rings[0].drop, b = run.rings[1].drop;
+    var scale = Math.max(a, b);
+    return scale < 1e-9 || Math.abs(a - b) / scale < 0.01;
+}
+
+check('с клапанами перепады по кольцам сошлись между собой', dropsEqual(pz.withValves),
+      pz.withValves.rings[0].drop.toFixed(2) + ' и '
+          + pz.withValves.rings[1].drop.toFixed(2) + ' Па');
+check('без клапанов перепады по кольцам сошлись между собой', dropsEqual(pz.without),
+      pz.without.rings[0].drop.toFixed(2) + ' и '
+          + pz.without.rings[1].drop.toFixed(2) + ' Па');
+
+near('напор равен перепаду по кольцу', pz.withValves.head,
+     pz.withValves.rings[0].drop, Math.max(pz.withValves.head * 0.01, 1e-9));
+
+check('без клапанов напор требуется меньший: сопротивление снято',
+      pz.without.head < pz.withValves.head,
+      'с клапанами ' + pz.withValves.head.toFixed(1) + ' Па, без них '
+          + pz.without.head.toFixed(1) + ' Па');
+
+/* --- главное: что будет без балансировки --- */
+
+var farWith = pz.withValves.rings[0], nearWith = pz.withValves.rings[1];
+var farOut = pz.without.rings[0], nearOut = pz.without.rings[1];
+
+check('с клапанами расход идёт в дальнее кольцо: оно длиннее и остывает сильнее',
+      farWith.share > nearWith.share,
+      'дальнее ' + (farWith.share * 100).toFixed(1) + ' %, ближнее '
+          + (nearWith.share * 100).toFixed(1) + ' %');
+
+check('без клапанов дальнее кольцо теряет расход',
+      farOut.flow < farWith.flow && farOut.share < farWith.share,
+      'было ' + (farWith.share * 100).toFixed(1) + ' %, стало '
+          + (farOut.share * 100).toFixed(1) + ' %');
+
+check('и отданный расход уходит в ближнее', nearOut.flow > nearWith.flow,
+      'ближнее было ' + nearWith.flow.toFixed(1) + ', стало ' + nearOut.flow.toFixed(1) + ' кг/ч');
+
+check('без клапанов дальнее кольцо остывает сильнее, чем с ними',
+      farOut.endTemperature < farWith.endTemperature - 1.0,
+      'с клапанами ' + farWith.endTemperature.toFixed(2) + ' °C, без них '
+          + farOut.endTemperature.toFixed(2) + ' °C');
+
+check('без клапанов ближнее кольцо, наоборот, перегрето относительно дальнего',
+      nearOut.endTemperature > farOut.endTemperature + 1.0,
+      'ближнее ' + nearOut.endTemperature.toFixed(2) + ' °C, дальнее '
+          + farOut.endTemperature.toFixed(2) + ' °C');
+
+/*
+    Балансировка на то и ставится: с клапанами температуры у потребителей
+    сходятся, без них расходятся. Это та же мысль, что выше, но сказанная
+    числом, которое читает человек в таблице.
+*/
+var spreadWith = Math.abs(farWith.endTemperature - nearWith.endTemperature);
+var spreadOut = Math.abs(farOut.endTemperature - nearOut.endTemperature);
+check('с клапанами температуры у потребителей сходятся', spreadWith < 2.0,
+      'разброс ' + spreadWith.toFixed(2) + ' К');
+check('без клапанов разброс температур много больше', spreadOut > spreadWith + 3.0,
+      'с клапанами ' + spreadWith.toFixed(2) + ' К, без них ' + spreadOut.toFixed(2) + ' К');
+
+/* --- заданный вручную расход на ИТП --- */
+
+var asked = {};
+asked[proofZone.key] = proofDesign * 2.0;
+var byAsked = ProofSolver.run(proofNet, proofSettings, asked);
+var pa = byAsked.zones[0];
+
+check('заданный расход взят как задан', pa.given,
+      'помечен как расчётный');
+near('и равен тому, что вписали', pa.total, proofDesign * 2.0, 1e-9);
+near('расчётный расход рядом с заданным сохранён', pa.design, proofDesign, 1e-9);
+near('расходы колец дают заданное', sumFlows(pa.withValves), pa.total, pa.total * 1e-6);
+
+/*
+    Клапаны настроены основным расчётом и при другом расходе не перенастраиваются:
+    Kv у них зафиксирован. Поэтому соотношение сопротивлений держится, и доли
+    по кольцам почти не меняются — а вот напор растёт примерно вчетверо,
+    как и положено квадратичному сопротивлению.
+*/
+check('при вдвое большем расходе доли по кольцам почти те же',
+      Math.abs(pa.withValves.rings[0].share - farWith.share) < 0.02,
+      'было ' + (farWith.share * 100).toFixed(1) + ' %, стало '
+          + (pa.withValves.rings[0].share * 100).toFixed(1) + ' %');
+
+var headRatio = pa.withValves.head / pz.withValves.head;
+check('напор при вдвое большем расходе растёт примерно вчетверо',
+      headRatio > 3.0 && headRatio < 5.0,
+      'отношение ' + headRatio.toFixed(2));
+
+check('вода горячее: при большем расходе остывать не успевает',
+      pa.withValves.rings[0].endTemperature > farWith.endTemperature,
+      'было ' + farWith.endTemperature.toFixed(2) + ', стало '
+          + pa.withValves.rings[0].endTemperature.toFixed(2) + ' °C');
+
+// Половинный расход — обратная сторона того же: вода не доходит горячей.
+var half = {};
+half[proofZone.key] = proofDesign * 0.5;
+var ph = ProofSolver.run(proofNet, proofSettings, half).zones[0];
+check('при вдвое меньшем расходе дальнее кольцо не догревается',
+      ph.withValves.rings[0].endTemperature < farWith.endTemperature - 1.0,
+      'было ' + farWith.endTemperature.toFixed(2) + ', стало '
+          + ph.withValves.rings[0].endTemperature.toFixed(2) + ' °C');
+
+// Заданный расход для чужой зоны к этой не относится.
+var alienAsk = { 'какая-то другая зона': proofDesign * 5.0 };
+var pAlien = ProofSolver.run(proofNet, proofSettings, alienAsk).zones[0];
+check('заданный расход чужой зоны игнорируется', !pAlien.given,
+      'принят как заданный');
+near('и считается по расчётному', pAlien.total, proofDesign, 1e-9);
+
+// Ноль и мусор в поле означают «по расчёту», а не «нулевой расход».
+[0, -5, NaN, null, undefined, ''].forEach(function (bad) {
+    var junk = {};
+    junk[proofZone.key] = bad;
+    var pj = ProofSolver.run(proofNet, proofSettings, junk).zones[0];
+    check('в поле ' + JSON.stringify(bad) + ' — считается по расчётному расходу',
+          !pj.given && Math.abs(pj.total - proofDesign) < 1e-9,
+          'взято ' + pj.total);
+});
+
+check('и после всех прогонов основной расчёт по-прежнему не тронут',
+      proofSnapshot(proofNet) === beforeProof, 'числа основного расчёта изменились');
+
+// --- Т29: обратка на вводе ИТП ------------------------------------------------
+/*
+    Худшая точка зоны и обратка на ИТП — разные числа, и путать их нельзя.
+    Худшая точка отвечает за кран у потребителя: там важна самая холодная
+    ветка. Теплообменник же греет воду, уже перемешанную со всех веток,
+    и подогрев считается от неё.
+
+    Главная проверка здесь — энергетическая: c·G·Δt по смешанной обратке
+    обязана сойтись с суммой теплопотерь зоны. Если эти два числа разошлись,
+    значит расходы и температуры посчитаны по разным сетям.
+*/
+
+head('Т29: обратка на вводе ИТП и нагрузка на циркуляцию');
+
+var itpNet = new HwNetwork();
+var iHub = addNode(itpNet, 0, 0, 0);
+var iTee = addNode(itpNet, 2, 0, 0);
+var iFarT = addNode(itpNet, 2, 0, 50);
+var iFarR = addNode(itpNet, 3, 0, 50);
+var iNearT = addNode(itpNet, 12, 0, 10);
+var iNearR = addNode(itpNet, 13, 0, 10);
+
+addSegment(itpNet, iHub, iTee, 'supply', 2.0);
+addSegment(itpNet, iTee, iFarT, 'supply', 50.0);
+addSegment(itpNet, iFarT, iFarR, 'link', 0.02);
+addSegment(itpNet, iFarR, iHub, 'return', 52.0);
+addSegment(itpNet, iTee, iNearT, 'supply', 10.0);
+addSegment(itpNet, iNearT, iNearR, 'link', 0.02);
+addSegment(itpNet, iNearR, iHub, 'return', 12.0);
+
+makeZone(itpNet);
+itpNet.sourceNodes.push(iHub);
+
+var itpSettings = baseSettings();
+Calc.run(itpNet, itpSettings);
+
+var itpZone = itpNet.zones[0];
+
+check('кольца собрались', itpNet.rings.length === 2, 'колец: ' + itpNet.rings.length);
+
+check('обратка нашлась', itpZone.returnFlow > 0,
+      'расход по обратке ' + itpZone.returnFlow);
+
+near('расход по обратке равен расходу зоны',
+     itpZone.returnFlow, itpZone.flow, itpZone.flow * 1e-6);
+
+/*
+    Энергетический баланс. Сколько тепла труба отдала, столько ИТП и должен
+    вернуть: c·G·Δt = ΣQ. Это не тавтология — расход и температуры считаются
+    разными путями, расход подбором из условия у потребителя, а температуры
+    протяжкой по сети со смешением в узлах.
+*/
+near('нагрузка на циркуляцию сходится с теплопотерями зоны',
+     itpZone.itpHeat, itpZone.heatLoss, itpZone.heatLoss * 0.01);
+
+near('подогрев равен разности подачи и обратки', itpZone.itpDeltaT,
+     itpSettings.supplyTemperature - itpZone.returnTemperature, 1e-9);
+
+check('обратка холоднее подачи',
+      itpZone.returnTemperature < itpSettings.supplyTemperature - 1.0,
+      'обратка ' + itpZone.returnTemperature.toFixed(2) + ' °C');
+
+/*
+    Обратка холоднее худшей точки: от потребителя вода идёт дальше по Т4
+    и остывает ещё. Если бы обратка оказалась теплее, это значило бы, что
+    циркуляционный трубопровод в расчёте не остывает вовсе.
+*/
+check('обратка холоднее худшей точки зоны',
+      itpZone.returnTemperature < itpZone.minTemperature,
+      'обратка ' + itpZone.returnTemperature.toFixed(2)
+          + ', худшая точка ' + itpZone.minTemperature.toFixed(2));
+
+// Без замыкания на ИТП подогрев считать не из чего — и программа это говорит.
+var openNet = new HwNetwork();
+var oA = addNode(openNet, 0, 0, 0);
+var oB = addNode(openNet, 0, 0, 10);
+addSegment(openNet, oA, oB, 'supply', 10.0);
+makeZone(openNet);
+openNet.sourceNodes.push(oA);
+Calc.run(openNet, openSettingsHolder());
+
+function openSettingsHolder() { return baseSettings(); }
+
+check('без обратки подогрев не выдумывается',
+      openNet.zones[0].returnFlow === 0
+      && openNet.zones[0].itpDeltaT === 0,
+      'подогрев ' + openNet.zones[0].itpDeltaT);
+
+// --- Т30: подбор циркуляционного насоса ---------------------------------------
+/*
+    Насос подбирается по рабочей точке: расход системы и потери самого
+    невыгодного кольца. Проверяется не «какой именно насос» — каталог
+    ориентировочный и будет пополняться, — а правила подбора, которые
+    от каталога не зависят.
+*/
+
+head('Т30: подбор циркуляционного насоса');
+
+var pumpSettings = baseSettings();
+
+near('метры водяного столба считаются по горячей воде',
+     PumpSelector.metres(9834.0), 9834.0 / (Water.Density * Water.G), 1e-12);
+
+check('метры по горячей воде отличаются от метров по холодной',
+      Math.abs(PumpSelector.metres(10000) - 10000 / (1000 * Water.G)) > 0.015,
+      'разница меньше ожидаемой');
+
+var someFlow = 0.5 * Water.Density;          // 0,5 м³/ч в кг/ч
+var pick = PumpSelector.select(someFlow, 5000.0, pumpSettings);
+
+check('насос подобран', pick.model !== null, pick.note || 'не подобран');
+check('корпус пригоден для ГВС',
+      pick.model && (pick.model.body === 'бронза'
+                     || pick.model.body === 'нержавеющая сталь'),
+      pick.model ? pick.model.body : '—');
+
+near('расход переведён в м³/ч', pick.flow, 0.5, 1e-9);
+near('требуемый напор в метрах', pick.required,
+     5000.0 / (Water.Density * Water.G), 1e-9);
+near('напор с запасом — произведение', pick.demand,
+     pick.required * pumpSettings.pumpHeadReserve, 1e-9);
+
+check('напор насоса в рабочей точке перекрывает требуемый с запасом',
+      pick.workingHead >= pick.demand,
+      'насос даёт ' + pick.workingHead.toFixed(2) + ', нужно ' + pick.demand.toFixed(2));
+
+/*
+    Берётся самый слабый из подходящих: лишний напор уходит в клапаны
+    и шумит. Проверяется прямо — ни один допущенный к ГВС насос, который
+    тоже справляется, не должен быть слабее выбранного в этой точке.
+*/
+var weaker = null;
+PumpCatalog.forDhw().forEach(function (model) {
+    if (model === pick.model) return;
+    if (pick.flow > model.flowMax) return;
+
+    var head = PumpCatalog.headAt(model, pick.flow);
+    if (head >= pick.demand && head < pick.workingHead) weaker = model;
+});
+
+check('слабее подходящего насоса в каталоге нет', weaker === null,
+      weaker ? 'нашёлся ' + weaker.model : '');
+
+// Чугунные отклоняются, и причина называется вслух.
+var ironMentioned = pick.rejected.some(function (line) {
+    return line.indexOf('чугун') >= 0;
+});
+check('чугунные отклонены с объяснением', ironMentioned,
+      pick.rejected.join(' / ') || 'ни один не отклонён');
+
+PumpCatalog.models.forEach(function (model) {
+    if (model.dhw) return;
+    check('чугунный ' + model.model + ' к подбору не допускается',
+          PumpCatalog.forDhw().indexOf(model) < 0, 'попал в список');
+});
+
+// Характеристика: в нуле расхода — паспортный напор, на пределе — ноль.
+var sample = PumpCatalog.forDhw()[0];
+near('при нулевом расходе напор паспортный',
+     PumpCatalog.headAt(sample, 0.0), sample.headMax, 1e-12);
+near('на пределе расхода напор нулевой',
+     PumpCatalog.headAt(sample, sample.flowMax), 0.0, 1e-12);
+check('за пределом расхода напор не уходит в минус',
+      PumpCatalog.headAt(sample, sample.flowMax * 2) === 0.0,
+      'получено ' + PumpCatalog.headAt(sample, sample.flowMax * 2));
+
+// Невозможная точка: расход больше любого насоса в каталоге.
+var huge = PumpSelector.select(500.0 * Water.Density, 500000.0, pumpSettings);
+check('на невозможной рабочей точке насос не выдумывается',
+      huge.model === null && huge.note, huge.note || 'молча вернул насос');
+
+var nothing = PumpSelector.select(0.0, 1000.0, pumpSettings);
+check('без расхода подбирать нечего', nothing.model === null, 'что-то подобрал');
+
+// Подбор по зонам кладётся в зону, а не теряется.
+check('насос записан в зону', itpZone.pump !== null && itpZone.pump !== undefined,
+      'в зоне пусто');
+near('насос подбирался на расход зоны', itpZone.pump.flow,
+     itpZone.flow / Water.Density, 1e-9);
+
+// --- Т31: положение клапана в проверочном расчёте ------------------------------
+/*
+    Самый частый вопрос после наладки — «выставили не то, что будет».
+    Поэтому положение клапана в проверочном расчёте можно задать руками.
+
+    Главное здесь: заданное положение НЕ записывается в клапан. Это
+    предположение «что если», и попасть в ведомость оно не должно.
+*/
+
+head('Т31: заданное вручную положение клапана');
+
+var handNet = new HwNetwork();
+var hHub = addNode(handNet, 0, 0, 0);
+var hTee = addNode(handNet, 2, 0, 0);
+var hFarT = addNode(handNet, 2, 0, 60);
+var hFarR = addNode(handNet, 3, 0, 60);
+var hNearT = addNode(handNet, 14, 0, 6);
+var hNearR = addNode(handNet, 15, 0, 6);
+
+addSegment(handNet, hHub, hTee, 'supply', 2.0);
+addSegment(handNet, hTee, hFarT, 'supply', 60.0);
+addSegment(handNet, hFarT, hFarR, 'link', 0.02);
+addSegment(handNet, hFarR, hHub, 'return', 62.0);
+addSegment(handNet, hTee, hNearT, 'supply', 6.0);
+addSegment(handNet, hNearT, hNearR, 'link', 0.02);
+addSegment(handNet, hNearR, hHub, 'return', 8.0);
+
+makeZone(handNet);
+handNet.sourceNodes.push(hHub);
+
+var handSettings = baseSettings();
+Calc.run(handNet, handSettings);
+
+// Кольцо с клапаном — то, которому его подобрала увязка.
+var valved = -1;
+for (var hr = 0; hr < handNet.rings.length; hr++) {
+    if (handNet.rings[hr].valveSegment >= 0
+        && handNet.segments[handNet.rings[hr].valveSegment].valve
+        && handNet.segments[handNet.rings[hr].valveSegment].valve.actualKv > 0) {
+        valved = handNet.rings[hr].index;
+    }
+}
+
+check('увязка поставила клапан', valved >= 0, 'клапана нет ни на одном кольце');
+
+if (valved >= 0) {
+    var valveState = handNet.segments[handNet.rings[valved].valveSegment].valve;
+    var valveModel = valveState.model;
+    var designPosition = valveState.position;
+    var designKv = valveState.actualKv;
+
+    var base = ProofSolver.run(handNet, handSettings, {}, null);
+    var baseRing = ringOf(base, valved);
+
+    // Прикрываем клапан вдвое против расчётного положения.
+    var tighter = {};
+    tighter[valved] = Math.max(valveModel.deadBand + valveModel.step,
+                               ValveCatalog.roundPosition(valveModel, designPosition / 2));
+
+    var tightened = ProofSolver.run(handNet, handSettings, {}, tighter);
+    var closedRing = ringOf(tightened, valved);
+
+    check('заданное положение помечено как ручное', closedRing.byHand,
+          'не помечено');
+    check('прикрытый клапан даёт меньший Kv', closedRing.valveKv < designKv,
+          'Kv ' + closedRing.valveKv.toFixed(3) + ' против ' + designKv.toFixed(3));
+    check('и кольцо теряет расход', closedRing.flow < baseRing.flow,
+          'было ' + baseRing.flow.toFixed(1) + ', стало ' + closedRing.flow.toFixed(1));
+    check('и остывает сильнее',
+          closedRing.endTemperature < baseRing.endTemperature,
+          'было ' + baseRing.endTemperature.toFixed(2)
+              + ', стало ' + closedRing.endTemperature.toFixed(2));
+
+    // Полностью открытый клапан — не то же, что его отсутствие.
+    var opened = ProofSolver.run(handNet, handSettings, {},
+                                 (function () { var o = {}; o[valved] = 'full'; return o; })());
+    var openedRing = ringOf(opened, valved);
+
+    check('полностью открытый клапан опознан', openedRing.wideOpen, 'не опознан');
+    near('его Kv — наибольший по шкале', openedRing.valveKv,
+         ValveCatalog.kvAt(valveModel, ValveCatalog.fullOpen(valveModel)), 1e-9);
+    check('открытый клапан всё ещё сопротивляется — это не «без клапанов»',
+          openedRing.valveKv > 0 && openedRing.flow !== opened.zones[0].without.rings[0].flow,
+          'открытый клапан посчитан как отсутствующий');
+
+    // Положение за пределами шкалы приводится к ней, и об этом говорится.
+    var over = {};
+    over[valved] = ValveCatalog.fullOpen(valveModel) * 10;
+    var overRing = ringOf(ProofSolver.run(handNet, handSettings, {}, over), valved);
+
+    check('положение вне шкалы усечено', overRing.clamped, 'не усечено');
+    near('и приведено к пределу шкалы', overRing.position,
+         ValveCatalog.fullOpen(valveModel), 1e-9);
+
+    // Мусор в поле — положение из расчёта, а не ноль и не авария.
+    var junkPositions = {};
+    junkPositions[valved] = 'абв';
+    var junkRing = ringOf(ProofSolver.run(handNet, handSettings, {}, junkPositions), valved);
+    check('нечисловое положение игнорируется', !junkRing.byHand, 'принято за положение');
+
+    // И главное: клапан в сети не тронут ни одним из прогонов.
+    check('клапан в сети остался с расчётной настройкой',
+          valveState.position === designPosition && valveState.actualKv === designKv,
+          'настройка клапана изменилась: было ' + designPosition
+              + ', стало ' + valveState.position);
+}
+
+function ringOf(result, ringIndex) {
+    var rings = result.zones[0].withValves.rings;
+    for (var i = 0; i < rings.length; i++) {
+        if (rings[i].index === ringIndex) return rings[i];
+    }
+    return null;
+}
+
+// --- Т32: выгрузка схемы в DXF -------------------------------------------------
+/*
+    DXF — не картинка, а чертёж: его вставляют в лист и там мерят и правят.
+    Поэтому проверяется структура файла, а не его вид: парность кодов групп,
+    существование каждого слоя, на который ссылается сущность, и кодировка.
+*/
+
+head('Т32: выгрузка схемы в DXF');
+
+var dxfApp = {
+    network: handNet,
+    settings: handSettings,
+    projectName: 'Проверка DXF',
+    zoneFilter: null,
+    accepts: function () { return true; },
+    acceptsZone: function () { return true; }
+};
+
+var dxfBytes = Dxf.build(dxfApp, 'flat');
+
+check('файл не пустой', dxfBytes.length > 500, 'байт: ' + dxfBytes.length);
+check('все байты однобайтовые', dxfBytes instanceof Uint8Array, 'не Uint8Array');
+
+var dxfText = '';
+for (var dbi = 0; dbi < dxfBytes.length; dbi++)
+    dxfText += String.fromCharCode(dxfBytes[dbi]);
+
+var dxfLines = dxfText.split('\r\n');
+if (dxfLines[dxfLines.length - 1] === '') dxfLines.pop();
+
+check('строк чётное число — DXF состоит из пар «код, значение»',
+      dxfLines.length % 2 === 0, 'строк: ' + dxfLines.length);
+
+check('начинается с SECTION', dxfLines[0] === '0' && dxfLines[1] === 'SECTION',
+      dxfLines.slice(0, 2).join('/'));
+check('заканчивается на EOF',
+      dxfLines[dxfLines.length - 2] === '0' && dxfLines[dxfLines.length - 1] === 'EOF',
+      dxfLines.slice(-2).join('/'));
+
+// Коды групп обязаны быть числами: на нечисловом коде разбор падает.
+var badCode = null;
+for (var di = 0; di < dxfLines.length; di += 2) {
+    if (!/^\d+$/.test(dxfLines[di])) { badCode = di + ': ' + dxfLines[di]; break; }
+}
+check('все коды групп числовые', badCode === null, badCode);
+
+check('объявлена кодовая страница CP1251',
+      dxfText.indexOf('$DWGCODEPAGE') >= 0 && dxfText.indexOf('ANSI_1251') >= 0,
+      'не объявлена');
+check('единицы объявлены миллиметрами', dxfText.indexOf('$INSUNITS') >= 0,
+      'не объявлены');
+
+// Кириллица идёт байтами CP1251, а не UTF-8: в UTF-8 буква заняла бы два байта.
+var cyrillic = Dxf.toCp1251('Ду32');
+check('кириллица кодируется однобайтово',
+      cyrillic.length === 4 && cyrillic[0] === 0xC4 && cyrillic[1] === 0xF3,
+      'получено ' + cyrillic.join(','));
+near('буква «Ё» встаёт на своё место в CP1251', Dxf.toCp1251('Ё')[0], 0xA8, 0);
+near('градус тоже', Dxf.toCp1251('°')[0], 0xB0, 0);
+
+/*
+    Греческих букв в CP1251 нет, и они обязаны стать вопросительными знаками,
+    а не исчезнуть молча. Поэтому в подписях чертежа их и не используют:
+    вместо Δp пишется dP.
+*/
+near('отсутствующий в CP1251 знак заменяется вопросом',
+     Dxf.toCp1251('λ')[0], 0x3F, 0);
+
+// Каждая сущность лежит на объявленном слое.
+var declared = {};
+for (var dl = 0; dl < Dxf.Layers.length; dl++) declared[Dxf.Layers[dl].name] = true;
+
+var unknownLayer = null;
+var entities = 0;
+for (di = 0; di < dxfLines.length - 1; di += 2) {
+    if (dxfLines[di] !== '8') continue;
+    entities++;
+    if (!declared[dxfLines[di + 1]]) { unknownLayer = dxfLines[di + 1]; break; }
+}
+
+check('сущностей в файле достаточно', entities >= handNet.segments.length,
+      'сущностей: ' + entities + ', участков: ' + handNet.segments.length);
+check('все сущности лежат на объявленных слоях', unknownLayer === null,
+      'слой ' + unknownLayer + ' не объявлен');
+
+// Координаты — конечные числа, и в миллиметрах, а не в метрах.
+var badCoordinate = null;
+var biggest = 0;
+for (di = 0; di < dxfLines.length - 1; di += 2) {
+    var code = dxfLines[di];
+    if (code !== '10' && code !== '20' && code !== '11' && code !== '21') continue;
+
+    var value = parseFloat(dxfLines[di + 1]);
+    if (!isFinite(value)) { badCoordinate = dxfLines[di + 1]; break; }
+    if (Math.abs(value) > biggest) biggest = Math.abs(value);
+}
+
+check('все координаты — конечные числа', badCoordinate === null,
+      'найдено ' + badCoordinate);
+check('координаты в миллиметрах, а не в метрах', biggest > 1000,
+      'наибольшая координата ' + biggest.toFixed(0));
+
+/*
+    Десятичный разделитель — точка: DXF русской запятой не понимает.
+
+    Проверяются только числовые коды групп. В подписях запятая как раз нужна:
+    «Расход 0,0221 л/с» читает человек, и писать ему точку было бы неправильно.
+    Первая версия этой проверки искала запятую во всём файле и ловила именно
+    подписи — то есть требовала испортить текст ради формы чисел.
+*/
+var NUMERIC_CODES = { '10': 1, '20': 1, '30': 1, '11': 1, '21': 1, '31': 1,
+                      '40': 1, '62': 1, '70': 1 };
+var commaFound = null;
+
+for (di = 0; di < dxfLines.length - 1; di += 2) {
+    if (!NUMERIC_CODES[dxfLines[di]]) continue;
+    if (dxfLines[di + 1].indexOf(',') >= 0) {
+        commaFound = dxfLines[di] + ' = ' + dxfLines[di + 1];
+        break;
+    }
+}
+
+check('в числовых значениях разделитель — точка', commaFound === null, commaFound);
+
+// А в подписях запятая, наоборот, должна быть: их читает человек.
+var hasHumanComma = false;
+for (di = 0; di < dxfLines.length - 1; di += 2) {
+    if (dxfLines[di] === '1' && /\d,\d/.test(dxfLines[di + 1])) hasHumanComma = true;
+}
+
+check('в подписях числа записаны по-русски, с запятой', hasHumanComma,
+      'ни одной подписи с запятой не нашлось');
+
+var dxf3d = Dxf.build(dxfApp, '3d');
+check('трёхмерная выгрузка тоже собирается', dxf3d.length > 500,
+      'байт: ' + dxf3d.length);
+
+// --- Т33: пояснительная записка ------------------------------------------------
+/*
+    Записка — главный результат работы программы: её подшивают в проект.
+    Проверяется, что она собирается целиком, что таблицы в ней те же, что
+    на экране, и что к ним есть расшифровка столбцов.
+*/
+
+head('Т33: пояснительная записка');
+
+var reportApp = {
+    network: handNet,
+    settings: handSettings,
+    projectName: 'Записка, проверка',
+    zoneFilter: null,
+    activeTable: 'zones',
+    proof: ProofSolver.run(handNet, handSettings, {}, null),
+    accepts: function () { return true; },
+    acceptsZone: function () { return true; },
+    acceptsZoneKey: function () { return true; }
+};
+
+var reportHtml = Report.build(reportApp, []);
+
+check('записка собралась', reportHtml.length > 5000,
+      'символов: ' + reportHtml.length);
+check('это документ, который откроет Word',
+      reportHtml.indexOf('schemas-microsoft-com:office:word') > 0
+      && reportHtml.indexOf('<meta charset="utf-8">') > 0,
+      'заголовка Word нет');
+
+var parsed = new DOMParser().parseFromString(reportHtml, 'text/html');
+
+var sections = parsed.querySelectorAll('h2');
+check('разделов не меньше десяти', sections.length >= 10,
+      'разделов: ' + sections.length);
+
+var reportTables = parsed.querySelectorAll('table');
+check('таблиц в записке много', reportTables.length >= 12,
+      'таблиц: ' + reportTables.length);
+
+check('у каждой таблицы есть номер и название',
+      parsed.querySelectorAll('h3').length >= reportTables.length
+          - parsed.querySelectorAll('table.notes').length,
+      'заголовков меньше, чем таблиц');
+
+check('расшифровки столбцов есть', parsed.querySelectorAll('table.notes').length >= 5,
+      'расшифровок: ' + parsed.querySelectorAll('table.notes').length);
+
+/*
+    Таблицы записки обязаны совпадать с экранными. Если однажды кто-то
+    перепишет колонки в одном месте и забудет в другом, записка начнёт
+    расходиться с расчётом — и заметить это будет нечем, кроме этой проверки.
+*/
+['zones', 'heat', 'rings', 'valves', 'segments', 'hydraulics',
+ 'valveCalc', 'itp', 'proof'].forEach(function (name) {
+    var block = Tables.blockOf(name, reportApp);
+
+    check('таблица «' + block.title + '» разбирается для записки',
+          block.columns.length > 0 && Array.isArray(block.rows),
+          'не разобралась');
+
+    var wrongWidth = null;
+    for (var i = 0; i < block.rows.length; i++) {
+        if (block.rows[i].length !== block.columns.length) {
+            wrongWidth = i + ': ' + block.rows[i].length + ' вместо ' + block.columns.length;
+            break;
+        }
+    }
+
+    check('в «' + block.title + '» ширина строк совпадает с числом столбцов',
+          wrongWidth === null, wrongWidth);
+});
+
+// Числа в записке — те же, что в расчёте. Проверяется по напору насоса.
+var handZone = handNet.zones[0];
+check('требуемый напор попал в записку',
+      reportHtml.indexOf(Fmt.head(handZone.worstDrop)) > 0,
+      'напора ' + Fmt.head(handZone.worstDrop) + ' в тексте нет');
+
+// Оговорки — обязательная часть: без них ориентировочный подбор насоса
+// ушёл бы в проект как заводской.
+check('оговорка про ориентировочный подбор насоса есть',
+      reportHtml.indexOf('ОРИЕНТИРОВОЧНЫЙ') > 0
+      || reportHtml.indexOf('ориентировочный') > 0,
+      'оговорки нет');
+check('оговорка про неновые стальные трубы есть',
+      reportHtml.indexOf('неновые') > 0, 'оговорки нет');
+
+/*
+    Разметка не должна ломаться на угловых скобках в данных: имя проекта
+    человек пишет сам, и символ «<» в нём не повод испортить документ.
+
+    Сама строка собирается из кусков нарочно: закрывающий тег сценария,
+    написанный целиком, браузер закроет прямо в середине литерала, и дальше
+    не выполнится ничего. Это касается и комментариев — в них такой тег
+    тоже нельзя написать целиком, разбор HTML про комментарии не знает.
+*/
+var markup = '<' + 'script>alert(1)<' + '/script>';
+
+check('угловые скобки в данных экранируются',
+      Report.build({
+          network: handNet, settings: handSettings,
+          projectName: markup,
+          zoneFilter: null, activeTable: 'zones', proof: reportApp.proof,
+          accepts: function () { return true; },
+          acceptsZone: function () { return true; },
+          acceptsZoneKey: function () { return true; }
+      }, []).indexOf(markup) < 0,
+      'разметка из данных попала в документ как разметка');
+
+// --- итог -------------------------------------------------------------------
+
+var totalBox = document.getElementById('total');
+totalBox.className = failed === 0 ? 'pass' : 'fail';
+totalBox.textContent = failed === 0
+    ? 'Все проверки пройдены: ' + passed + '. Ядро считает те же числа, что и плагин, '
+        + 'кроме двух мест в трении: сталь считается как неновая по Шевелёву — через '
+        + 'эквивалентную шероховатость заросшей трубы, — и переходная область '
+        + 'Re 2300…4000 сшита плавно вместо разрыва вдвое.'
+    : 'Провалено проверок: ' + failed + ' из ' + (failed + passed) + '. Расчёту верить нельзя.';
+</script>
+
+</body>
+</html>

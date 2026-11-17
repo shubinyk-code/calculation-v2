@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Самопроверка библиотеки объектов</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+    main { max-width: 1100px; }
+    .t-ok { color: var(--good); }
+    .t-bad { color: var(--bad); font-weight: 600; }
+    #summary { font-size: 15px; font-weight: 600; padding: 10px 14px; border-radius: 8px; }
+    #summary.ok { background: var(--good-soft); color: var(--good); }
+    #summary.bad { background: var(--bad-soft); color: var(--bad); }
+    td.name { width: 55%; }
+</style>
+</head>
+<body>
+
+<header class="top">
+    <div class="brand">ВК<span>Самопроверка библиотеки объектов</span></div>
+    <div class="spacer"></div>
+    <a href="index.html"><button>К программе</button></a>
+    <a href="tests.html"><button>Проверки расхода</button></a>
+    <a href="tests-hyd.html"><button>Проверки гидравлики</button></a>
+</header>
+
+<main>
+<div class="card">
+    <h2>Что проверяется</h2>
+    <p class="hint">
+        Объекты и ревизии в IndexedDB (отдельная база «vk-library-test», рабочая не затрагивается): запись рабочей
+        копии, номера ревизий Р00, Р01 …, признак «изменён после ревизии» по отпечатку, возврат к ревизии, переключение
+        между объектами, копия, переименование, архив со всеми ревизиями и его чтение, удаление.
+    </p>
+    <div id="summary">Идёт проверка…</div>
+</div>
+<div class="card"><table id="results"><tbody></tbody></table></div>
+</main>
+
+<script src="js/sp30-data.js"></script>
+<script src="js/format.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/demand.js"></script>
+<script src="js/consumers.js"></script>
+<script src="js/riser.js"></script>
+<script src="js/hyd-data.js"></script>
+<script src="js/hyd-model.js"></script>
+<script src="js/hyd-graph.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/library.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var TEST_DB = 'vk-library-test';
+    var body = document.querySelector('#results tbody');
+    var passed = 0;
+    var failed = 0;
+
+    function section(title) {
+        body.insertAdjacentHTML('beforeend', '<tr class="total"><td colspan="3" class="left">' + Format.html(title) + '</td></tr>');
+    }
+
+    function check(name, actual, expected) {
+        var ok = actual === expected;
+        if (ok) passed++; else failed++;
+        body.insertAdjacentHTML('beforeend',
+            '<tr><td class="left name">' + Format.html(name) + '</td>'
+            + '<td class="left ' + (ok ? 't-ok' : 't-bad') + '">' + (ok ? 'ок' : 'НЕ СОШЛОСЬ') + '</td>'
+            + '<td class="left">' + Format.html(String(actual) + ' / ожидалось ' + String(expected)) + '</td></tr>');
+    }
+
+    function project(name, hpr) {
+        var p = Storage.blank();
+        p.name = name;
+        p.hyd.survey.hPr = hpr;
+        return p;
+    }
+
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    function finish(error) {
+        var summary = document.getElementById('summary');
+        if (error) {
+            failed++;
+            body.insertAdjacentHTML('beforeend', '<tr><td class="left name">Проверка оборвалась</td><td class="left t-bad">ОШИБКА</td><td class="left">'
+                + Format.html(error && error.stack ? error.stack : String(error)) + '</td></tr>');
+        }
+        summary.className = failed === 0 ? 'ok' : 'bad';
+        summary.textContent = failed === 0 ? 'Все проверки пройдены: ' + passed : 'Не сошлось проверок: ' + failed + ' из ' + (passed + failed);
+    }
+
+    var a, b;                     // объекты
+    var live;                     // «открытый» проект — то, что у программы в App.project
+
+    Library.configure(TEST_DB);
+
+    Library.drop(TEST_DB).then(function () {
+        section('Объект и рабочая копия');
+
+        live = project('Томск 2', 20);
+        return Library.boot(live, true);
+    }).then(function (res) {
+        check('первый запуск заводит объект из текущего проекта', Library.info().name, 'Томск 2');
+        check('проект остаётся тем же объектом', res.project === live && !res.opened, true);
+        check('ревизий нет, привязки нет', Library.info().hasRevs + '|' + Library.info().baseRev, 'false|');
+
+        a = Library.info().id;
+        live.hyd.survey.hPr = 21;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.list();
+    }).then(function (list) {
+        check('рабочая копия пишется сама после правки', list.length, 1);
+        return Library.openObject(a);
+    }).then(function (p) {
+        check('рабочая копия читается обратно с правкой', p.hyd.survey.hPr, 21);
+
+        section('Ревизии');
+
+        live = p;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.saveRevision('первая выдача');
+    }).then(function (rev) {
+        check('первая ревизия — Р00', rev.label, 'Р00');
+        check('комментарий сохранён', rev.comment, 'первая выдача');
+        check('рабочая копия привязана к ревизии, правок нет', Library.info().baseLabel + '|' + Library.info().dirty, 'Р00|false');
+
+        live.hyd.survey.hPr = 25;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        check('после правки — «изменён»', Library.info().dirty, true);
+
+        live.hyd.survey.hPr = 21;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        check('правка отменена руками — снова «без изменений»', Library.info().dirty, false);
+
+        live.hyd.survey.hPr = 30;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.saveRevision('второй вариант');
+    }).then(function (rev) {
+        check('вторая ревизия — Р01', rev.label, 'Р01');
+        return Library.revisions(a);
+    }).then(function (revs) {
+        check('ревизии идут от новой к старой', revs.map(function (r) { return r.label; }).join(','), 'Р01,Р00');
+
+        // возврат к Р00
+        return Library.restoreRevision(revs[1].id);
+    }).then(function (p) {
+        check('возврат к Р00: данные как в ревизии', p.hyd.survey.hPr, 21);
+        live = p;
+        Library.touch(live);
+        return sleep(300);
+    }).then(function () {
+        check('после возврата — «без изменений», основа Р00', Library.info().baseLabel + '|' + Library.info().dirty, 'Р00|false');
+        return Library.list();
+    }).then(function (list) {
+        check('в списке — ревизий две', list[0].revCount, 2);
+
+        section('Несколько объектов');
+
+        var p = project('Парковый 9', 15);
+        return Library.create(p);
+    }).then(function (meta) {
+        b = meta.id;
+        return Library.openObject(b);
+    }).then(function (p) {
+        check('второй объект открывается своей копией', p.name + '|' + p.hyd.survey.hPr, 'Парковый 9|15');
+        check('у второго объекта ревизий нет', Library.info().hasRevs, false);
+        live = p;
+        live.hyd.survey.hPr = 16;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.openObject(a);
+    }).then(function (p) {
+        check('первый объект сохранил свою работу', p.name + '|' + p.hyd.survey.hPr, 'Томск 2|21');
+        check('ревизии первого на месте после переключения', Library.info().baseLabel, 'Р00');
+        return Library.openObject(b);
+    }).then(function (p) {
+        check('правка второго объекта дожила до переключения', p.hyd.survey.hPr, 16);
+
+        return Library.duplicate(b);
+    }).then(function (meta) {
+        check('копия объекта — отдельный объект с пометкой', meta.name, 'Парковый 9 (копия)');
+        return Library.rename(meta.id, 'Парковый 9, корпус 2');
+    }).then(function (title) {
+        check('переименование не открытого объекта', title, 'Парковый 9, корпус 2');
+        return Library.list();
+    }).then(function (list) {
+        check('в списке три объекта', list.length, 3);
+        check('новое название видно в списке', list.some(function (o) { return o.name === 'Парковый 9, корпус 2'; }), true);
+
+        section('Архив');
+        return Library.exportArchive(a);
+    }).then(function (arc) {
+        check('архив: формат и две ревизии', arc.format + '|' + arc.revisions.length, 'vk-object-archive|2');
+        check('архив: номера ревизий по порядку', arc.revisions.map(function (r) { return r.no; }).join(','), '0,1');
+        check('архив: распознаётся', Library.isArchive(arc), true);
+        check('обычный проект архивом не считается', Library.isArchive(Storage.blank()), false);
+
+        var viaText = JSON.parse(JSON.stringify(arc));      // как файл
+        return Library.importArchive(viaText);
+    }).then(function (meta) {
+        check('архив читается обратно: основа Р00, следующий номер 2', meta.baseLabel + '|' + meta.nextNo, 'Р00|2');
+        return Library.revisions(meta.id).then(function (revs) {
+            check('у прочитанного объекта две ревизии с комментариями', revs.map(function (r) { return r.comment; }).join('|'), 'второй вариант|первая выдача');
+            return Library.revisionProject(revs[1].id);
+        });
+    }).then(function (p) {
+        check('ревизия из архива — те же данные', p.hyd.survey.hPr, 21);
+
+        section('Удаление');
+        return Library.revisions(a);
+    }).then(function (revs) {
+        return Library.deleteRevision(revs[0].id).then(function () { return Library.revisions(a); });
+    }).then(function (revs) {
+        check('удаление ревизии', revs.length, 1);
+        return Library.deleteObject(b);
+    }).then(function () {
+        return Library.list();
+    }).then(function (list) {
+        check('удаление объекта убирает его из списка', list.some(function (o) { return o.name === 'Парковый 9'; }), false);
+        return Library.openObject(b).then(function () { return 'открылся'; }, function () { return 'не найден'; });
+    }).then(function (r) {
+        check('удалённый объект открыть нельзя', r, 'не найден');
+
+        section('Отпечаток');
+        var base = project('A', 20);
+        var shuffled = {};
+        Object.keys(base).reverse().forEach(function (k) { shuffled[k] = base[k]; });
+        check('отпечаток не зависит от порядка полей', Library.printOf(shuffled), Library.printOf(base));
+        var edited = JSON.parse(JSON.stringify(base));
+        edited.hyd.survey.hPr = 21;
+        check('отпечаток меняется при правке', Library.printOf(edited) !== Library.printOf(base), true);
+        check('номер ревизии — «Р» и две цифры', Library.labelOf(0) + Library.labelOf(7) + Library.labelOf(12), 'Р00Р07Р12');
+    }).then(function () {
+        return Library.close();
+    }).then(function () {
+        return Library.drop(TEST_DB);
+    }).then(function () { finish(); }, finish);
+})();
+</script>
+</body>
+</html>

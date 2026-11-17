@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ГВС · Расчёт циркуляции</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="topbar">
+    <a class="hub-home hub-home--icon" href="../../index.html" title="На главную" aria-label="На главную"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></a>
+    <div class="brand">ГВС<span>Расчёт циркуляции</span></div>
+
+    <input id="projectName" class="name" type="text" value="Без названия" title="Название проекта">
+
+    <label class="field">Система
+        <select id="zoneFilter"></select>
+    </label>
+
+    <label class="field">Метод
+        <select id="method">
+            <option value="solve">Подбор по 60 °C у потребителя</option>
+            <option value="norm">По формуле СП, без подбора</option>
+        </select>
+    </label>
+
+    <button id="run" class="primary">Расчёт</button>
+
+    <div class="history">
+        <button id="undoBtn" title="Отменять нечего" disabled>↶ Отменить</button>
+        <button id="redoBtn" title="Возвращать нечего" disabled>↷ Вернуть</button>
+    </div>
+
+    <span id="status" class="status"></span>
+
+    <div class="spacer"></div>
+
+    <button id="reportBtn" class="accent" title="Собрать пояснительную записку: исходные данные, методика с формулами, все таблицы с расшифровкой столбцов, схемы и оговорки">Записка в Word</button>
+    <button id="propsBtn">Свойства систем…</button>
+    <button id="settingsBtn">Исходные данные…</button>
+    <button id="importBtn">Импорт из Revit…</button>
+    <button id="openBtn">Открыть…</button>
+    <button id="saveBtn">Сохранить</button>
+    <button id="newBtn">Новый</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+</header>
+
+<main>
+
+    <aside class="panel left">
+        <h3>Инструменты</h3>
+        <div class="tools" id="tools">
+            <button data-tool="select" class="active">Выбор <kbd>Esc</kbd></button>
+            <button data-tool="pipeT3" class="t3">Труба Т3 — подающая</button>
+            <button data-tool="pipeT4" class="t4">Труба Т4 — циркуляционная</button>
+            <button data-tool="link" class="link">Перемычка Т3–Т4</button>
+            <button data-tool="itp" class="itp">ИТП — отметить выход Т3 и вход Т4</button>
+            <button data-tool="valve" class="valve">Балансировочный клапан</button>
+            <button data-tool="erase" class="erase">Удалить</button>
+        </div>
+
+        <h3>Заготовка новой трубы</h3>
+        <label class="field">Система
+            <select id="tplZone"></select>
+        </label>
+        <label class="field">Материал
+            <select id="tplMaterial"></select>
+        </label>
+        <label class="field">Диаметр
+            <select id="tplSize"></select>
+        </label>
+        <label class="field">Изоляция
+            <select id="tplInsulation"></select>
+        </label>
+        <label class="field">Толщина изоляции, мм
+            <select id="tplThickness"></select>
+        </label>
+        <label class="field">Длина на плоской схеме, м
+            <input id="tplLength" type="number" min="0.1" step="0.1" value="3">
+        </label>
+
+        <h3>Черчение</h3>
+        <label class="field">Шаг сетки, м
+            <select id="gridStep">
+                <option value="0.1">0,1</option>
+                <option value="0.25">0,25</option>
+                <option value="0.5" selected>0,5</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+            </select>
+        </label>
+        <label class="field">Плоскость построения, м
+            <input id="planeOffset" type="number" step="0.1" value="0">
+        </label>
+        <label class="check"><input id="showGrid" type="checkbox" checked> Показывать сетку</label>
+
+        <p class="hint">
+            Щелчок — первая точка, второй щелчок — вторая. Направление привязано
+            к осям X, Y и Z; <kbd>Alt</kbd> ставит точку свободно на плоскости
+            построения, <kbd>Esc</kbd> обрывает цепочку.
+        </p>
+    </aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <div class="viewtabs">
+                <button data-view="3d" class="active">Трёхмерная схема</button>
+                <button data-view="flat">Плоская схема</button>
+            </div>
+
+            <div class="presets" id="presets"></div>
+
+            <!--
+                Действия собраны в группу нарочно: панель переносится по строкам,
+                и без группы кнопки рвались между рядами — часть уезжала наверх
+                к видам, часть оставалась внизу. Группа переносится целиком.
+            -->
+            <div class="actions">
+                <button id="sizesBtn" title="Показать участки, у которых скорость вышла за допустимую, и заменить им Ду на рекомендуемый">Рекомендуемые Ду…</button>
+                <button id="splitTouchBtn" title="Поставить узлы там, где труба упирается в другую трубу, но с ней не связана">Узлы в примыканиях</button>
+                <button id="closeEndsBtn" title="Соединить концы Т3 и Т4, стоящие рядом, но не связанные перемычкой">Замкнуть близкие концы</button>
+                <button id="relayoutBtn" title="Пересобрать плоскую схему по разобранным кольцам">Разложить автоматически</button>
+                <button id="fitBtn">Вписать в окно</button>
+                <button id="pngBtn">Картинка</button>
+                <button id="dxfBtn" title="Выгрузить схему в DXF: слои по роли труб, подписи как на экране, миллиметры">DXF</button>
+            </div>
+        </div>
+
+        <div class="canvas-wrap">
+            <canvas id="canvas3d" tabindex="0"></canvas>
+            <canvas id="canvasFlat" tabindex="0" class="hidden"></canvas>
+        </div>
+    </section>
+
+    <aside class="panel right">
+        <h3>Выбранное</h3>
+        <div id="inspector" class="inspector">
+            <p class="hint">Ничего не выбрано. Щёлкните по участку или узлу.</p>
+        </div>
+
+        <h3>Подписи <button id="labelsToggle" class="mini">снять все</button></h3>
+        <div id="labels" class="labels"></div>
+
+        <h3>Раскраска</h3>
+        <select id="colourMode"></select>
+        <div id="legend" class="legend"></div>
+    </aside>
+
+</main>
+
+<footer class="dock">
+    <div class="docktabs">
+        <div class="tabs" id="tableTabs"></div>
+        <div class="spacer"></div>
+        <label class="field inline hidden" id="proofWrap" title="Пусто — берётся расчётный расход зоны">Расход на ИТП, л/с
+            <!--
+                Нарочно не type="number": такое поле молча выбрасывает запятую,
+                а расход в 0,15 л/с набирают именно с запятой. Разбор ниже
+                принимает и запятую, и точку.
+            -->
+            <input id="proofFlow" type="text" inputmode="decimal" size="7"
+                   placeholder="по расчёту">
+            <button id="proofReset" class="mini" title="Вернуть вкладку к расчётному состоянию: расход на ИТП и все положения клапанов">сбросить</button>
+        </label>
+        <span id="proofHint" class="status hidden"></span>
+
+        <label class="field inline" id="roleFilterWrap">Показать
+            <select id="roleFilter">
+                <option value="all">все участки</option>
+                <option value="supply">только Т3</option>
+                <option value="return">только Т4</option>
+            </select>
+        </label>
+        <button id="copyBtn">Копировать</button>
+        <button id="csvBtn">Выгрузить CSV</button>
+        <button id="dockToggle" class="mini">свернуть</button>
+    </div>
+    <div class="dockbody" id="tableBody"></div>
+</footer>
+
+<div id="sizesModal" class="modal hidden">
+    <div class="sheet">
+        <h2>Рекомендуемые диаметры</h2>
+        <p class="hint">
+            Собраны участки, у которых скорость вышла за допустимые пределы. Выше
+            допустимой — шум и износ, ниже минимальной — диаметр завышен, труба
+            остывает сильнее нужного и стоит дороже. Отметьте, что менять: расчёт
+            после этого пойдёт заново целиком, и у части участков рекомендация
+            сменится — замена диаметра меняет скорость у соседей по кольцу.
+        </p>
+        <div id="sizesBody" class="sizes"></div>
+        <div class="sheet-buttons">
+            <button id="sizesNone" class="mini">снять все</button>
+            <button id="sizesAll" class="mini">отметить все</button>
+            <div class="spacer"></div>
+            <button id="sizesCancel">Отмена</button>
+            <button id="sizesApply" class="primary">Применить отмеченные</button>
+        </div>
+    </div>
+</div>
+
+<div id="propsModal" class="modal hidden">
+    <div class="sheet narrow">
+        <h2>Свойства систем</h2>
+        <p class="hint">
+            Задаётся сразу всем участкам — не надо править каждую трубу по отдельности.
+            Диаметр не трогается: он у каждого участка свой. Если у нового материала
+            такого Ду нет, берётся ближайший по внутреннему диаметру, и об этом сказано
+            в ответе.
+        </p>
+
+        <label class="field">Применить
+            <select id="propsScope"></select>
+        </label>
+
+        <h4>Трубы</h4>
+        <label class="check"><input id="propsUseMaterial" type="checkbox" checked>
+            Материал труб</label>
+        <label class="field">
+            <select id="propsMaterial"></select>
+        </label>
+
+        <h4>Изоляция</h4>
+        <label class="check"><input id="propsUseInsulation" type="checkbox" checked>
+            Изоляция и её толщина</label>
+        <label class="field">
+            <select id="propsInsulation"></select>
+        </label>
+        <label class="field">Толщина, мм
+            <select id="propsThickness"></select>
+        </label>
+
+        <h4>Балансировочная арматура</h4>
+        <label class="field">Фирма для автоматического подбора
+            <select id="propsBrand"></select>
+        </label>
+        <p class="hint">
+            На клапаны, у которых типоразмер задан вручную, фирма не влияет:
+            там артикул выбран, и спорить с ним не о чем.
+        </p>
+
+        <div class="sheet-buttons">
+            <button id="propsCancel">Отмена</button>
+            <button id="propsApply" class="primary">Применить</button>
+        </div>
+    </div>
+</div>
+
+<div id="modal" class="modal hidden">
+    <div class="sheet">
+        <h2>Исходные данные</h2>
+        <div class="columns">
+            <div>
+                <h4>Температуры</h4>
+                <label class="field">Температура на выходе из ИТП, °C
+                    <input data-setting="supplyTemperature" type="number" step="0.5"></label>
+                <label class="field">Требуемая у потребителя, °C
+                    <input data-setting="requiredTemperature" type="number" step="0.5"></label>
+                <label class="field">Расчётный перепад Δt для формулы СП, К
+                    <input data-setting="deltaT" type="number" step="0.5"></label>
+                <label class="field">Коэффициент разрегулировки β
+                    <input data-setting="beta" type="number" step="0.1"></label>
+                <label class="check"><input data-setting="normHeatSupplyOnly" type="checkbox">
+                    В формулу СП брать только теплопотери Т3</label>
+
+                <h4>Теплопотери, СП 61.13330 прил. Э</h4>
+                <label class="field">Коэффициент теплоотдачи α, Вт/(м²·К)
+                    <input data-setting="alpha" type="number" step="0.5"></label>
+                <label class="field">Температура окружающего воздуха, °C
+                    <input data-setting="ambientTemperature" type="number" step="0.5"></label>
+                <label class="field">Доля потерь через опоры и арматуру
+                    <input data-setting="localHeatFactor" type="number" step="0.05"></label>
+                <label class="field">λ изоляции по умолчанию, Вт/(м·К)
+                    <input data-setting="defaultLambda" type="number" step="0.001"></label>
+                <label class="check"><input data-setting="countBarePipes" type="checkbox">
+                    Считать теплопотери неизолированных труб</label>
+                <label class="field">Теплоотдача полотенцесушителя, Вт
+                    <input data-setting="towelRailWatts" type="number" step="10"></label>
+            </div>
+            <div>
+                <h4>Гидравлика</h4>
+                <label class="field">Шероховатость по умолчанию, мм
+                    <input data-setting="roughnessMm" type="number" step="0.01"></label>
+                <label class="field">Доля местных потерь напора
+                    <input data-setting="localPressureFactor" type="number" step="0.05"></label>
+                <label class="field">Допустимая скорость, м/с
+                    <input data-setting="maxVelocity" type="number" step="0.1"></label>
+                <label class="field">Минимальная скорость, м/с
+                    <input data-setting="minVelocity" type="number" step="0.05"></label>
+                <label class="field">Допустимая невязка колец, доля
+                    <input data-setting="allowedImbalance" type="number" step="0.01"></label>
+
+                <h4>Сшивка и замыкания</h4>
+                <label class="field">Допуск замыкания кольца Т3–Т4, мм
+                    <input data-setting="linkToleranceMm" type="number" step="1"></label>
+                <label class="check"><input data-setting="linkSameSystem" type="checkbox">
+                    Сшивать разрывы внутри одной системы</label>
+                <label class="field">Допуск сшивки разрыва, мм
+                    <input data-setting="sameSystemToleranceMm" type="number" step="5"></label>
+                <label class="check"><input data-setting="linkAcrossZones" type="checkbox">
+                    Замыкать кольцо и при несовпадении имён зон</label>
+
+                <h4>Условия прокладки по системам</h4>
+                <p class="hint">Пустая ячейка означает «как общее». Подвал, шахта
+                    и чердак греются в разную среду, а теплопотери линейно зависят
+                    от разности температур.</p>
+                <div id="zoneConditions"></div>
+            </div>
+        </div>
+        <div class="sheet-buttons">
+            <button id="modalClose" class="primary">Применить и пересчитать</button>
+        </div>
+    </div>
+</div>
+
+<script src="js/water.js"></script>
+<script src="js/catalog.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/model.js"></script>
+<script src="js/systemnaming.js"></script>
+<script src="js/heatloss.js"></script>
+<script src="js/hydraulics.js"></script>
+<script src="js/valves.js"></script>
+<script src="js/balancing.js"></script>
+<script src="js/pumps.js"></script>
+<script src="js/rings.js"></script>
+<script src="js/flowsolver.js"></script>
+<script src="js/normsolver.js"></script>
+<script src="js/proof.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/theme.js"></script>
+<script src="js/projection.js"></script>
+<script src="js/autolayout.js"></script>
+<script src="js/edit.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/history.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/revitimport.js"></script>
+<script src="js/report.js"></script>
+<script src="js/ui.js"></script>
+
+</body>
+</html>

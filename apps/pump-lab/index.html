@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Насосная лаборатория</title>
+<meta name="description" content="Учебный стенд установки повышения давления: как работает центробежный насос, частотный преобразователь и реле давления, куда движется рабочая точка, что происходит на минимальной частоте, при кавитации и сухом ходе.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230f8a7e'/%3E%3Cpath d='M16 16 L16 4 M16 16 L27 21 M16 16 L5 21' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <a class="hub-home" href="../../index.html"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>На главную</a>
+    <h1>Насосная лаборатория</h1>
+    <p>Установка повышения давления: с частотным преобразователем и без — крутите, ломайте, смотрите</p>
+  </div>
+  <nav class="tabs-nav">
+    <button type="button" data-tab="lab">Лабораторный стенд</button>
+    <button type="button" data-tab="exp">Опыты</button>
+    <button type="button" data-tab="anatomy">Как устроен насос</button>
+    <button type="button" data-tab="basics">Азбука кривых</button>
+    <button type="button" data-tab="drain">Дренаж</button>
+    <button type="button" data-tab="sprink">Спринклеры</button>
+    <button type="button" data-tab="help">Справка</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ============================================================ СТЕНД -->
+<section class="tab" id="tab-lab">
+  <div class="lab">
+    <aside class="side" id="side"></aside>
+    <div class="labmain">
+      <div class="card exp-banner" id="expBanner" hidden></div>
+
+      <div class="card scheme-card">
+        <div class="toolbar">
+          <button type="button" id="btnRun">⏸ Пауза</button>
+          <span class="speeds">скорость
+            <button type="button" data-speed="0.25">×¼</button><button type="button" data-speed="1" class="on">×1</button><button type="button" data-speed="4">×4</button><button type="button" data-speed="10">×10</button><button type="button" data-speed="30">×30</button>
+          </span>
+          <button type="button" id="btnReset" title="Время, энергия, счётчики пусков — с нуля; настройки остаются">Сброс времени</button>
+          <span class="clock">t = <b id="simClock">0 с</b></span>
+          <label class="mode-top">Режим <select id="modeTop"></select></label>
+          <label class="mode-top" id="fManualTopWrap">Частота <input type="range" id="fManualTop" min="0" max="60" step="0.5"><b id="fManualTopV"></b></label>
+        </div>
+        <div id="scheme" class="scheme"></div>
+        <p class="scheme-hint">Щёлкайте по кранам, чтобы открыть или закрыть их; по насосу — включить/выключить (в ручном режиме) или сломать (в автомате); по задвижке — закрыть/открыть. Цвет труб — давление: чем темнее, тем выше. Бегущие штрихи — вода, их скорость — расход.</p>
+      </div>
+
+      <div class="grid2">
+        <div class="card chart-card">
+          <div class="ctitle"><b>Характеристики Q–H</b>
+            <span class="opts">
+              <select id="optY"><option value="pump">ось: напор насоса</option><option value="out">ось: давление на выходе</option></select>
+              <label><input type="checkbox" id="opt_range"> поле ПЧ</label>
+              <label><input type="checkbox" id="opt_family"> 20–60 Гц</label>
+              <label><input type="checkbox" id="opt_parabola"> парабола подобия</label>
+              <label><input type="checkbox" id="opt_eta"> КПД</label>
+              <label><input type="checkbox" id="opt_trail"> след</label>
+            </span>
+          </div>
+          <canvas id="qh" class="qh"></canvas>
+        </div>
+        <div class="card chart-card">
+          <div class="ctitle"><b>Осциллограф</b>
+            <span class="opts"><select id="trendWin"><option value="30">30 с</option><option value="60" selected>60 с</option><option value="120">2 мин</option><option value="300">5 мин</option><option value="900">15 мин</option></select></span>
+          </div>
+          <canvas id="trend" class="trend"></canvas>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card"><h3>Что сейчас происходит</h3><ul id="explain" class="explain"></ul></div>
+        <div class="card"><h3>Показания</h3><div id="readings" class="readings"></div><h3>Журнал</h3><ol id="log" class="log"></ol></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ ОПЫТЫ -->
+<section class="tab" id="tab-exp">
+  <div class="page">
+    <p class="intro">Каждый опыт настраивает стенд, запускает его и показывает сверху, что делать и на что смотреть. После опыта можно менять любые параметры — ради этого всё и сделано.</p>
+    <div id="expList" class="exp-list"></div>
+  </div>
+</section>
+
+<!-- ============================================================ УСТРОЙСТВО -->
+<section class="tab" id="tab-anatomy">
+  <div class="page">
+    <div class="ana">
+      <div class="card ana-main">
+        <canvas id="anaCanvas" class="ana-canvas"></canvas>
+        <div class="ana-ctl">
+          <label class="bs"><span class="bl">Частота</span><input type="range" id="anaF" min="0" max="60" step="1" value="50"><b id="anaFV"></b></label>
+          <label class="bs"><span class="bl">Задвижка</span><input type="range" id="anaOpen" min="0" max="1" step="0.01" value="0.6"><b id="anaOpenV"></b></label>
+          <label class="bs"><span class="bl">Диаметр колеса D2</span><input type="range" id="anaD" min="100" max="250" step="1" value="150"><b id="anaDV"></b></label>
+          <label class="bs"><span class="bl">Угол лопатки β2</span><input type="range" id="anaBeta" min="15" max="40" step="1" value="25"><b id="anaBetaV"></b></label>
+          <label class="bs"><span class="bl">Ступеней</span><input type="range" id="anaZ" min="1" max="8" step="1" value="1"><b id="anaZV"></b></label>
+        </div>
+      </div>
+      <div class="ana-side">
+        <div class="card"><h3>Показания</h3><div id="anaOut" class="kvlist"></div></div>
+        <div class="card"><h3>Законы подобия от 50 Гц</h3><div id="anaLaws"></div></div>
+        <div class="card"><canvas id="anaChart" class="ana-chart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="text-cols">
+      <section class="card txt">
+        <h3>Как он работает</h3>
+        <p>Вода входит по оси в «глаз» рабочего колеса. Лопатки раскручивают её, и центробежная сила отбрасывает воду к краю колеса. Уходящая вода освобождает место — у входа возникает разрежение, туда подсасывается новая вода, а на периферии — избыточное давление (Аникин, § 2.2).</p>
+        <p>С колеса вода выходит быстрой. <b>Спиральный отвод</b> (улитка) постепенно расширяется и тормозит поток — скорость превращается в давление, как в диффузоре. В многоступенчатом насосе вместо улитки — лопаточный отвод, который подводит воду к следующему колесу.</p>
+        <p>Опыт в разрезе: закройте задвижку. Частицы перестают уходить в патрубок и просто крутятся вместе с колесом — энергия идёт в нагрев.</p>
+      </section>
+      <section class="card txt">
+        <h3>Почему напор падает с ростом подачи</h3>
+        <p>Уравнение Эйлера: теоретический напор H<sub>т</sub> = u<sub>2</sub>·c<sub>2u</sub>/g, где u<sub>2</sub> = π·D<sub>2</sub>·n/60 — окружная скорость края колеса, c<sub>2u</sub> — закрутка потока на выходе.</p>
+        <p>Больше подача — больше радиальная скорость c<sub>m2</sub>. У лопаток, загнутых назад (угол β<sub>2</sub>), это уменьшает закрутку: c<sub>2u</sub> = u<sub>2</sub> − c<sub>m2</sub>/tg β<sub>2</sub>. Поэтому теоретическая линия наклонена вниз. Из неё вычитаются потери на трение (растут как Q²) и на удар при входе на лопатки (минимальны в расчётной точке) — получается реальная кривая.</p>
+        <p>Посмотрите треугольник скоростей на разрезе: прикрывайте задвижку и следите, как меняется c<sub>2</sub>.</p>
+      </section>
+      <section class="card txt">
+        <h3>Почему частота так сильна</h3>
+        <p>Подача — это объём, который колесо «перекладывает» за оборот, поэтому Q ~ n. Напор — это энергия от скорости, а скорость u<sub>2</sub> ~ n, энергия ~ скорость², поэтому H ~ n². Мощность = подача × напор, P ~ n³.</p>
+        <p>При 40 Гц: подача 80%, напор 64%, мощность 51%. При 25 Гц: подача 50%, напор 25%, мощность 12,5%. Кавитационный запас NPSH<sub>тр</sub> тоже ~ n² (Аникин, § 2.4).</p>
+        <p><b>Обточка колеса</b> работает похоже: Q ~ D<sub>2</sub>, H ~ D<sub>2</sub>², уменьшать диаметр можно не более чем на 20%, КПД почти не меняется.</p>
+        <p><b>Ступени</b>: в многоступенчатом насосе колёса стоят последовательно, напоры складываются при одинаковой подаче (Wilo, с. 22).</p>
+      </section>
+      <section class="card txt">
+        <h3>Из чего состоит насос</h3>
+        <ul>
+          <li><b>Подвод</b> — делает поток перед колесом ровным; осевой (конфузор) у консольных и вертикальных насосов, боковой — у насосов двустороннего входа и многоступенчатых.</li>
+          <li><b>Рабочее колесо</b> — у водопроводных насосов 6–8 лопаток, у канализационных 1–4. Закрытое (два диска) или открытое.</li>
+          <li><b>Отвод</b> — спиральный, кольцевой или лопаточный. У спирального на нерасчётных режимах появляется радиальная сила, гнущая вал; поэтому бывают двойные спирали.</li>
+          <li><b>Уплотнения вала</b> — сальниковые, манжетные, торцовые (механические, ~90% современных насосов), лабиринтные. Торцовое уплотнение боится сухого хода и перегрева воды.</li>
+          <li><b>Подшипники</b> — воспринимают радиальные и осевые силы.</li>
+        </ul>
+      </section>
+      <section class="card txt">
+        <h3>Кавитация</h3>
+        <p>Если абсолютное давление на входе в колесо опускается до давления насыщенного пара, вода вскипает. Пузырьки уносятся в зону высокого давления и схлопываются — удары разрушают металл, растут шум и вибрация, падают напор и КПД.</p>
+        <p>Причины: высокая температура воды, большая высота всасывания, засорённая или длинная всасывающая линия, высокогорье, слишком большой расход (NPSH<sub>тр</sub> растёт).</p>
+        <p>Стадии: начальная → частично развившаяся → полностью развившаяся (срыв работы). Условие: NPSH<sub>A</sub> ≥ NPSH3 + 0,5 м или ≥ S<sub>A</sub>·NPSH3, где NPSH3 — надкавитационный напор, при котором напор насоса падает на 3%.</p>
+      </section>
+      <section class="card txt">
+        <h3>Мощность и КПД</h3>
+        <p>Полезная мощность P<sub>u</sub> = ρ·Q·g·H. КПД насоса η = P<sub>u</sub>/P — отношение полезной мощности к мощности на валу. Общий КПД агрегата учитывает ещё двигатель (и ПЧ).</p>
+        <p>При Q = 0 полезная мощность ноль, но мотор тянет 30–50% от номинальной — всё это нагревает воду в корпусе. Справа от оптимума КПД тоже падает, а мощность растёт.</p>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ АЗБУКА -->
+<section class="tab" id="tab-basics">
+  <div class="page">
+    <p class="intro">Карточки — по разделам пособий. Насос во всех карточках один и тот же, что и на стенде по умолчанию: H0 = 58 м, Qопт = 6 м³/ч, Hопт = 46 м при 50 Гц.</p>
+    <div id="basicsHost" class="basics"></div>
+  </div>
+</section>
+
+<!-- ============================================================ ДРЕНАЖ -->
+<section class="tab" id="tab-drain">
+  <div class="lab">
+    <aside class="side" id="drSide"></aside>
+    <div class="labmain">
+      <div class="card scheme-card">
+        <div class="toolbar">
+          <button type="button" id="drRun">⏸ Пауза</button>
+          <span class="speeds">скорость
+            <button type="button" data-drspeed="1">×1</button><button type="button" data-drspeed="5">×5</button><button type="button" data-drspeed="20">×20</button><button type="button" data-drspeed="60">×60</button><button type="button" data-drspeed="240">×240</button>
+          </span>
+          <button type="button" id="drBurst" title="Добавить 1 м³ воды за 2 минуты">💧 Залп воды</button>
+          <button type="button" id="drReset">Сброс времени</button>
+          <span class="clock">t = <b id="drClock">0 с</b></span>
+        </div>
+        <div id="drScheme" class="scheme"></div>
+        <p class="scheme-hint">Вертикаль — в масштабе: от дна приямка до выпуска. Приямок наполняется притоком, поплавки всплывают по очереди, шкаф включает насосы. Щелчок по насосу — вкл/выкл (вручную) или авария (в автомате). Кривые насосов сняты с каталожных листов.</p>
+      </div>
+      <div class="grid2">
+        <div class="card chart-card"><div class="ctitle"><b>Насос и трубопровод: где рабочая точка</b></div><canvas id="drQH" class="qh"></canvas></div>
+        <div class="card chart-card"><div class="ctitle"><b>Уровень и расходы по времени</b></div><canvas id="drTrend" class="trend"></canvas></div>
+      </div>
+      <div class="grid2">
+        <div class="card"><h3>Расчёт в текущей точке</h3><div id="drInfo" class="readings"></div></div>
+        <div class="card"><h3>Раздельно или в один трубопровод</h3><div id="drCompare"></div><h3>Журнал</h3><ol id="drLog" class="log"></ol></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ СПРИНКЛЕРЫ -->
+<section class="tab" id="tab-sprink">
+  <div class="lab">
+    <aside class="side" id="spSide"></aside>
+    <div class="labmain">
+      <div class="card scheme-card">
+        <div class="toolbar">
+          <button type="button" id="spNext" class="primary">+1 ороситель</button>
+          <button type="button" id="spPrev">−1</button>
+          <button type="button" id="spDesign">Расчётная площадь</button>
+          <button type="button" id="spAll">Вскрыть все</button>
+          <button type="button" id="spClose">Закрыть все</button>
+          <button type="button" id="spDefaults">По умолчанию</button>
+        </div>
+        <div id="spScheme" class="scheme"></div>
+        <p class="scheme-hint">Щёлкайте по оросителям — вскрываются и закрываются. «+1» вскрывает следующий по удалённости от диктующего (дальний рядок, конец). Круг вокруг оросителя — орошаемая площадка, чем гуще цвет — тем выше интенсивность. Цвет труб — давление.</p>
+      </div>
+      <div class="grid2">
+        <div class="card chart-card"><div class="ctitle"><b>Насос и сеть: баланс при каждом вскрытии</b></div><canvas id="spQH" class="qh"></canvas></div>
+        <div class="card chart-card"><div class="ctitle"><b>Интенсивность у вскрытых оросителей</b></div><canvas id="spBars" class="qh"></canvas></div>
+      </div>
+      <div class="card"><h3>Расчёт (СП 485, прил. Б)</h3><div id="spInfo" class="readings"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ СПРАВКА -->
+<section class="tab" id="tab-help">
+  <div class="page narrow">
+    <section class="card txt">
+      <h3>Что на стенде</h3>
+      <p>Слева направо: источник воды (городской водопровод с подпором или бак разрыва струи с поплавковым клапаном) → всасывающий коллектор → насосы с задвижками и обратными клапанами → напорный коллектор с датчиком давления (PT), манометром и мембранным баком → задвижка → расходомер → стояк здания с кранами на разных этажах → слив (в канализацию или обратно в бак).</p>
+      <p>Над каждым насосом — его привод: «ПЧ 43,2 Гц» (частотный преобразователь) или «Сеть 50 Гц» (прямой пуск). Шкаф управления получает сигнал датчика давления и командует приводами (пунктирные линии).</p>
+      <h3>Режимы управления</h3>
+      <ul>
+        <li><b>Ручной, прямой пуск</b> — вы включаете насосы, они всегда на 50 Гц. Регулировать можно только задвижкой.</li>
+        <li><b>Ручной, ПЧ</b> — вы задаёте частоту сами (и ниже f мин — чтобы увидеть последствия).</li>
+        <li><b>Реле давления</b> — насосы без ПЧ включаются и выключаются по порогам давления, у каждого следующего насоса пороги ниже (каскад, Wilo с. 39).</li>
+        <li><b>ПЧ на ведущем + пиковые</b> — ведущий насос с ПЧ держит уставку ПИ-регулятором, пиковые включаются на полной частоте (серия типа Comfort, Wilo с. 40).</li>
+        <li><b>ПЧ на каждом</b> — все работающие насосы на одной частоте, добавляются по частоте (серия типа Comfort-Vario).</li>
+      </ul>
+      <h3>График Q–H</h3>
+      <ul>
+        <li><b>Толстая зелёная</b> — совместная кривая работающих насосов (с потерями в арматуре и на вводе).</li>
+        <li><b>Пунктир цвета насоса</b> — кривая каждого насоса на его текущей частоте.</li>
+        <li><b>Синяя</b> — характеристика сети при текущем открытии кранов и задвижки.</li>
+        <li><b>Закрашенная точка</b> — подача насосов, <b>кольцо</b> — разбор потребителей. Если они не совпадают — разница уходит в мембранный бак или берётся из него.</li>
+        <li><b>Крестик</b> — точка равновесия при нынешних оборотах: туда стремится система. <b>След</b> показывает путь точки за последние ~25 с.</li>
+        <li>Ось «напор насоса» — как в каталогах: разница давлений после и до насоса. Ось «давление на выходе» — то, что видит датчик: подпор + напор насоса (как на рисунке Wilo с. 41).</li>
+      </ul>
+      <h3>Дренаж</h3>
+      <p>Насосы — по точкам каталожных листов (кривая между точками — монотонный сплайн, правее последней точки — пунктир «вне рабочего поля»). Потери в стальных трубах — Дарси с λ Шевелева для неновых труб (dр = dвн − запас), местные — через Σζ. Напор отсчитывается от дна приямка: Hгеом = отметка выпуска − уровень воды, поэтому рабочая точка «гуляет» за цикл откачки. При совместной работе ищется напор в узле слияния, при котором сумма расходов веток равна расходу общего трубопровода.</p>
+      <h3>Спринклеры</h3>
+      <p>Расчёт по СП 485.1311500.2020, прил. Б: ороситель q = K·√H, участок ΔH = 1,2·Q²·L/Kт (Kт по табл. Б.2), узел управления Hуу = 1000·ξ·(Q·3,6)². Интенсивность у оросителя считается упрощённо: q / (шаг × шаг рядков). Реальная эпюра орошения зависит от паспорта оросителя.</p>
+      <h3>Как устроена модель</h3>
+      <p>Кривая насоса H = H0 + A·Q − B·Q², при частоте f пересчитывается по законам подобия (Q ~ n, H ~ n², P ~ n³, NPSH ~ n²). Течение в трубах устанавливается мгновенно, а «память» системы — объём воды в мембранном баке (газ сжимается изотермически) и в упругости труб. Давление в коллекторе считается неявным шагом 10 мс. Краны — местные сопротивления Q = Kv·√(ΔH/10) на своих отметках. Обратный клапан не даёт обратного тока. Нагрев: всё, что не стало полезной мощностью, греет воду в корпусе; её уносит поток и остужает корпус. Кавитация уменьшает напор, когда NPSHа &lt; NPSHтр.</p>
+      <p>Модель учебная: числа правдоподобны, но это не подбор насоса. Гидроудар (упругие волны в трубах) не моделируется.</p>
+      <h3>Источники</h3>
+      <ul>
+        <li>Насосная азбука. Справочное пособие по технологии повышения давления (Wilo).</li>
+        <li>Аникин Ю. В., Царев Н. С., Ушакова Л. И. Насосы и насосные станции: учеб. пособие. — Екатеринбург: Изд-во Урал. ун-та, 2018. Гл. 2.</li>
+      </ul>
+      <h3>Мелочи</h3>
+      <ul>
+        <li>Пробел — пауза. Настройки запоминаются в браузере.</li>
+        <li>Всё считается у вас в браузере, интернет не нужен.</li>
+      </ul>
+    </section>
+  </div>
+</section>
+
+</main>
+
+<script src="js/util.js"></script>
+<script src="js/model.js"></script>
+<script src="js/explain.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/anatomy.js"></script>
+<script src="js/basics.js"></script>
+<script src="js/experiments.js"></script>
+<script src="js/pipes.js"></script>
+<script src="js/drain.js"></script>
+<script src="js/sprink.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>

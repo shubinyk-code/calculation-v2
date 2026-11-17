@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Расчёт П-образных компенсаторов — проверки</title>
+<style>
+  body { font: 14px/1.5 system-ui, "Segoe UI", sans-serif; margin: 24px; color: #1d2733; background: #fff; }
+  .pass { color: #1f7a4d; } .fail { color: #c62f2f; font-weight: 600; }
+  .note { color: #5d6b79; font-style: italic; font-weight: 400; }
+  ul { padding-left: 18px; }
+  li { margin-bottom: 2px; }
+  #sum { font-size: 15px; font-weight: 600; }
+  p.lead { color: #5d6b79; max-width: 780px; }
+</style>
+</head>
+<body>
+<h1>Расчёт П-образных компенсаторов — проверки</h1>
+<p class="lead">Главные проверки — сверка с опубликованными числами: коэффициент жёсткости
+отводов по таблице № 1 и напряжения по таблице № 2 статьи С. Б. Горуновича
+«Расчёт П-образных компенсаторов» (РосТепло.ру, 2009). Остальные — внутренние
+инварианты расчёта и кодировка DXF.</p>
+<p id="sum"></p>
+<ul id="out"></ul>
+<script src="js/util.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/report.js"></script>
+<script src="js/tests.js"></script>
+</body>
+</html>

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>АУПТ · Самопроверка библиотеки объектов</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+    body { padding: 16px 20px; background: var(--bg); }
+    h1 { font-size: 16px; color: var(--blue); margin: 0 0 6px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; background: var(--panel); }
+    th, td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+    th { background: var(--blue-soft); }
+    tr.section td { background: var(--blue-soft); font-weight: 600; color: var(--blue); }
+    td.ok { color: var(--green); }
+    td.bad { color: var(--red); font-weight: 600; }
+    #summary { font-weight: 600; margin: 8px 0 12px; }
+</style>
+</head>
+<body>
+
+<h1>Самопроверка библиотеки объектов</h1>
+<p class="hint">
+    Объекты и ревизии в IndexedDB — в отдельной базе «aupt-library-test», рабочая библиотека не трогается:
+    запись рабочей копии, номера ревизий Р00, Р01 …, признак «изменён после ревизии» по отпечатку книги,
+    возврат к ревизии, переключение между объектами, копия, переименование, архив со всеми ревизиями и
+    чтение его обратно, удаление.
+</p>
+<div id="summary">Идёт проверка…</div>
+<table><tbody id="results"></tbody></table>
+
+<script src="js/format.js"></script>
+<script src="js/catalog.js"></script>
+<script src="js/sprinklers.js"></script>
+<script src="js/model.js"></script>
+<script src="js/solver.js"></script>
+<script src="js/vpv.js"></script>
+<script src="js/floors.js"></script>
+<script src="js/stations.js"></script>
+<script src="js/tch.js"></script>
+<script src="js/task.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/library.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var TEST_DB = 'aupt-library-test';
+    var body = document.getElementById('results');
+    var passed = 0;
+    var failed = 0;
+
+    function section(title) {
+        body.insertAdjacentHTML('beforeend', '<tr class="section"><td colspan="3">' + Fmt.html(title) + '</td></tr>');
+    }
+
+    function check(name, actual, expected) {
+        var ok = actual === expected;
+        if (ok) passed++; else failed++;
+        body.insertAdjacentHTML('beforeend', '<tr><td>' + Fmt.html(name) + '</td><td class="' + (ok ? 'ok">ок' : 'bad">НЕ СОШЛОСЬ')
+            + '</td><td>' + Fmt.html(String(actual) + ' / ждали ' + String(expected)) + '</td></tr>');
+    }
+
+    /** Книга с одним оросителем на заданной отметке — её и правим в проверках. */
+    function book(name, elev) {
+        var b = Storage.newBook();
+        b.object.name = name;
+        b.systems[0].project.settings.sprinklerElev = elev;
+        return b;
+    }
+
+    function elevOf(b) { return b.systems[0].project.settings.sprinklerElev; }
+
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    function finish(error) {
+        var summary = document.getElementById('summary');
+        if (error) {
+            failed++;
+            body.insertAdjacentHTML('beforeend', '<tr><td>Проверка оборвалась</td><td class="bad">ОШИБКА</td><td>'
+                + Fmt.html(error && error.stack ? error.stack : String(error)) + '</td></tr>');
+        }
+        summary.textContent = failed === 0
+            ? 'Все проверки пройдены: ' + passed
+            : 'Не сошлось проверок: ' + failed + ' из ' + (passed + failed);
+        summary.style.color = failed === 0 ? 'var(--green)' : 'var(--red)';
+    }
+
+    var a, b2;                    // объекты
+    var live;                     // «открытая» книга — то, что у программы в App.book
+
+    Library.configure(TEST_DB);
+
+    Library.drop(TEST_DB).then(function () {
+        section('Объект и рабочая копия');
+
+        live = book('ЖК Щербакова', -0.2);
+        return Library.boot(live, true);
+    }).then(function (res) {
+        check('первый запуск заводит объект из открытой книги', Library.info().name, 'ЖК Щербакова');
+        check('книга остаётся той же', res.book === live && !res.opened, true);
+        check('ревизий нет, привязки нет', Library.info().hasRevs + '|' + Library.info().baseRev, 'false|');
+
+        a = Library.info().id;
+        live.systems[0].project.settings.sprinklerElev = -0.5;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.list();
+    }).then(function (list) {
+        check('рабочая копия пишется сама после правки', list.length, 1);
+        return Library.openObject(a);
+    }).then(function (b) {
+        check('рабочая копия читается обратно с правкой', elevOf(b), -0.5);
+
+        section('Ревизии');
+
+        live = b;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.saveRevision('выдача на согласование');
+    }).then(function (rev) {
+        check('первая ревизия — Р00', rev.label, 'Р00');
+        check('комментарий сохранён', rev.comment, 'выдача на согласование');
+        check('рабочая копия привязана к ревизии, правок нет',
+            Library.info().baseLabel + '|' + Library.info().dirty, 'Р00|false');
+
+        live.systems[0].project.settings.sprinklerElev = -1.2;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        check('после правки — «изменён»', Library.info().dirty, true);
+
+        live.systems[0].project.settings.sprinklerElev = -0.5;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        check('правку отменили руками — снова «без изменений»', Library.info().dirty, false);
+
+        live.systems[0].project.settings.sprinklerElev = -2;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.saveRevision('после замечаний');
+    }).then(function (rev) {
+        check('вторая ревизия — Р01', rev.label, 'Р01');
+        return Library.revisions(a);
+    }).then(function (revs) {
+        check('ревизии идут от новой к старой', revs.map(function (r) { return r.label; }).join(','), 'Р01,Р00');
+        return Library.restoreRevision(revs[1].id);
+    }).then(function (b) {
+        check('возврат к Р00: данные как в ревизии', elevOf(b), -0.5);
+        live = b;
+        Library.touch(live);
+        return sleep(300);
+    }).then(function () {
+        check('после возврата — «без изменений», основа Р00',
+            Library.info().baseLabel + '|' + Library.info().dirty, 'Р00|false');
+        return Library.list();
+    }).then(function (list) {
+        check('в списке у объекта две ревизии', list[0].revCount, 2);
+
+        section('Несколько объектов');
+        return Library.create(book('ЖК Восточная', 3.1));
+    }).then(function (meta) {
+        b2 = meta.id;
+        return Library.openObject(b2);
+    }).then(function (b) {
+        check('второй объект открывается своей копией', b.object.name + '|' + elevOf(b), 'ЖК Восточная|3.1');
+        check('у второго объекта ревизий нет', Library.info().hasRevs, false);
+
+        live = b;
+        live.systems[0].project.settings.sprinklerElev = 3.5;
+        Library.touch(live);
+        return sleep(900);
+    }).then(function () {
+        return Library.openObject(a);
+    }).then(function (b) {
+        check('первый объект сохранил свою работу', b.object.name + '|' + elevOf(b), 'ЖК Щербакова|-0.5');
+        check('ревизии первого на месте после переключения', Library.info().baseLabel, 'Р00');
+        return Library.openObject(b2);
+    }).then(function (b) {
+        check('правка второго объекта дожила до переключения', elevOf(b), 3.5);
+        return Library.duplicate(b2);
+    }).then(function (meta) {
+        check('копия объекта — отдельный объект с пометкой', meta.name, 'ЖК Восточная (копия)');
+        return Library.rename(meta.id, 'ЖК Восточная, 2 этап');
+    }).then(function (title) {
+        check('переименование не открытого объекта', title, 'ЖК Восточная, 2 этап');
+        return Library.list();
+    }).then(function (list) {
+        check('в списке три объекта', list.length, 3);
+        check('новое название видно в списке',
+            list.some(function (o) { return o.name === 'ЖК Восточная, 2 этап'; }), true);
+
+        section('Архив');
+        return Library.exportArchive(a);
+    }).then(function (arc) {
+        check('архив: формат и две ревизии', arc.format + '|' + arc.revisions.length, 'aupt-object-archive|2');
+        check('архив: номера ревизий по порядку', arc.revisions.map(function (r) { return r.no; }).join(','), '0,1');
+        check('архив узнаётся', Library.isArchive(arc), true);
+        check('обычная книга архивом не считается', Library.isArchive(Storage.newBook()), false);
+
+        return Library.importArchive(JSON.parse(JSON.stringify(arc)));      // как из файла
+    }).then(function (meta) {
+        check('архив читается обратно: основа Р00, следующий номер 2', meta.baseLabel + '|' + meta.nextNo, 'Р00|2');
+        return Library.revisions(meta.id).then(function (revs) {
+            check('у прочитанного объекта две ревизии с комментариями',
+                revs.map(function (r) { return r.comment; }).join('|'), 'после замечаний|выдача на согласование');
+            return Library.revisionBook(revs[1].id);
+        });
+    }).then(function (b) {
+        check('ревизия из архива — те же данные', elevOf(b), -0.5);
+
+        section('Удаление');
+        return Library.revisions(a);
+    }).then(function (revs) {
+        return Library.deleteRevision(revs[0].id).then(function () { return Library.revisions(a); });
+    }).then(function (revs) {
+        check('удаление ревизии', revs.length, 1);
+        return Library.deleteObject(b2);
+    }).then(function () {
+        return Library.list();
+    }).then(function (list) {
+        check('удалённый объект ушёл из списка',
+            list.some(function (o) { return o.name === 'ЖК Восточная'; }), false);
+        return Library.openObject(b2).then(function () { return 'открылся'; }, function () { return 'не найден'; });
+    }).then(function (r) {
+        check('удалённый объект открыть нельзя', r, 'не найден');
+
+        section('Отпечаток книги');
+
+        var base = book('A', -0.2);
+        var shuffled = {};
+        Object.keys(base).reverse().forEach(function (k) { shuffled[k] = base[k]; });
+        check('отпечаток не зависит от порядка полей', Library.printOf(shuffled), Library.printOf(base));
+
+        var edited = JSON.parse(JSON.stringify(base));
+        edited.systems[0].project.settings.sprinklerElev = -0.3;
+        check('отпечаток меняется при правке', Library.printOf(edited) !== Library.printOf(base), true);
+
+        // Книга, прочитанная обратно, — та же книга: иначе после перезагрузки
+        // объект считался бы изменённым, хотя его никто не трогал.
+        var reread = Storage.unpackBook(JSON.parse(JSON.stringify(base)));
+        check('чтение книги не меняет отпечаток', Library.printOf(reread), Library.printOf(base));
+        check('номер ревизии — «Р» и две цифры',
+            Library.labelOf(0) + Library.labelOf(7) + Library.labelOf(12), 'Р00Р07Р12');
+    }).then(function () {
+        return Library.close();
+    }).then(function () {
+        return Library.drop(TEST_DB);
+    }).then(function () { finish(); }, finish);
+})();
+</script>
+</body>
+</html>

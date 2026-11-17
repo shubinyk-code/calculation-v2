@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Акты приёмки-передачи по договору</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <a class="hub-home hub-home--icon" href="../../index.html" title="На главную" aria-label="На главную"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></a>
+    <div class="logo">А</div>
+    <div>
+      <h1>Акт приёмки-передачи из договора</h1>
+      <p class="sub">Закиньте договор (.docx) — акт соберётся по вашему Word-шаблону. Всё считается в браузере, файлы никуда не уходят.</p>
+    </div>
+  </div>
+  <nav class="modes">
+    <button type="button" class="mode on" id="modeAct">Акт</button>
+    <button type="button" class="mode" id="modeCt">Договор</button>
+  </nav>
+  <div class="tplbox" id="tplbox">
+    <span class="tpl-name" id="tplName">Шаблон: …</span>
+    <button class="btn ghost sm" id="btnTplDownload" title="Скачать шаблон, открыть в Word и править оформление">Скачать шаблон</button>
+    <button class="btn ghost sm" id="btnTplUpload" title="Подставить свой Word-шаблон с метками {{…}}">Загрузить свой</button>
+    <button class="btn ghost sm" id="btnTplReset" hidden>Вернуть встроенный</button>
+    <button class="btn ghost sm" id="btnTplHelp">Метки</button>
+    <input type="file" id="tplFile" accept=".docx" hidden>
+  </div>
+</header>
+
+<div class="drop" id="drop">
+  <input type="file" id="contractFile" accept=".docx,.doc,.rtf" hidden>
+  <div class="drop-inner">
+    <div class="drop-icon">⇪</div>
+    <div>
+      <div class="drop-title" id="dropTitle">Перетащите договор сюда или <a href="#" id="pick">выберите файл</a></div>
+      <div class="drop-hint" id="dropHint">Word: .docx, а также старый .doc (сам переведу через Word, если открыто через serve.ps1). PDF и сканы не читаются.</div>
+    </div>
+    <button class="btn ghost sm" id="btnSample" hidden>Пример (ЦОД)</button>
+  </div>
+</div>
+
+<main class="work" id="work" hidden>
+  <section class="left" id="left">
+    <div id="warnBox"></div>
+
+    <details class="card" open>
+      <summary>Акт</summary>
+      <div class="grid2">
+        <label>Номер акта<input data-f="actNo" inputmode="numeric"></label>
+        <label>Дата акта<input type="date" data-f="actDate"></label>
+      </div>
+    </details>
+
+    <details class="card" open>
+      <summary>Договор-основание</summary>
+      <div class="grid2">
+        <label>Номер договора<input data-f="contractNo"></label>
+        <label>Дата договора<input type="date" data-f="contractDate"></label>
+      </div>
+      <div class="src" id="src-contract"></div>
+    </details>
+
+    <details class="card" open>
+      <summary>Позиции акта <span class="muted">— что принимаем и за сколько</span></summary>
+      <div id="items"></div>
+      <button class="btn ghost sm" id="btnAddItem">+ Добавить позицию</button>
+      <label class="obj">Объект <span class="muted">(печатается под перечнем разделов, можно оставить пустым)</span>
+        <textarea data-f="object" rows="3"></textarea>
+      </label>
+      <label class="vat">НДС
+        <select data-f="vat">
+          <option value="none">Без налога (НДС)</option>
+          <option value="20">В том числе НДС 20%</option>
+          <option value="22">В том числе НДС 22%</option>
+          <option value="10">В том числе НДС 10%</option>
+        </select>
+      </label>
+      <div class="src" id="src-price"></div>
+    </details>
+
+    <details class="card">
+      <summary>Заказчик</summary>
+      <div class="grid1">
+        <label>Наименование<input data-f="custName"></label>
+        <div class="grid2">
+          <label>ИНН<input data-f="custInn"></label>
+          <label>Телефон <span class="muted">(в договоре нет — запомню)</span><input data-f="custPhone"></label>
+        </div>
+        <label>Адрес<textarea data-f="custAddr" rows="2"></textarea></label>
+        <div class="grid2">
+          <label>Расчётный счёт<input data-f="custRs"></label>
+          <label>Корр. счёт<input data-f="custKs"></label>
+        </div>
+        <div class="grid2">
+          <label>Банк<input data-f="custBank"></label>
+          <label>БИК<input data-f="custBik"></label>
+        </div>
+        <label>Подписант (Фамилия И. О.)<input data-f="signer"></label>
+      </div>
+      <div class="src" id="src-customer"></div>
+    </details>
+
+    <details class="card">
+      <summary>Исполнитель</summary>
+      <div class="grid1">
+        <label>ФИО / наименование<input data-f="execName"></label>
+      </div>
+      <div class="src" id="src-executor"></div>
+    </details>
+
+    <details class="card">
+      <summary>Текст договора <span class="muted">— если что-то не нашлось: выделите нужное здесь и нажмите «⇦» у поля</span></summary>
+      <div id="ctext" class="ctext"></div>
+    </details>
+  </section>
+
+  <section class="right">
+    <div class="rhead">
+      <div class="rtitle">Предпросмотр <span class="muted">— кликните по тексту, чтобы поправить прямо в акте</span></div>
+      <button class="btn primary" id="btnBuild">Сформировать .docx</button>
+    </div>
+    <div id="ovBox"></div>
+    <div class="paperwrap" id="paperwrap"><div id="paper"></div></div>
+    <div id="checkBox"></div>
+  </section>
+</main>
+
+<div id="ctApp">
+  <div class="ct-org" id="ctOrg"></div>
+  <div class="ct-tabs" id="ctTabs"></div>
+  <div class="ct-main">
+    <section class="ct-left" id="ctLeft"></section>
+    <section class="ct-right">
+      <div class="rhead">
+        <div class="rtitle"><span id="ctPreviewTitle">Предпросмотр</span> <span class="muted">— текст правится прямо в листе (меняет образец этой вкладки); цветные поля — по клику</span></div>
+        <div class="ct-actions">
+          <button class="btn sm" id="ctMark" type="button" title="Выделите в листе фрагмент текста и нажмите — он станет полем">Сделать полем</button>
+          <button class="btn sm" id="ctZip" type="button">Все договоры (ZIP)</button>
+          <button class="btn primary" id="ctBuild" type="button">Скачать .docx</button>
+        </div>
+      </div>
+      <div class="paperwrap" id="ctPaperWrap"><div id="ctPaper"></div></div>
+    </section>
+  </div>
+  <div class="pop" id="ctPop" hidden></div>
+</div>
+
+<dialog id="helpDlg">
+  <form method="dialog">
+    <h2>Как устроен Word-шаблон</h2>
+    <p>Шаблон — обычный .docx. Оформление (шрифты, рамки, ширина колонок) правите в Word как обычно. Там, где должен быть текст из договора, стоит метка в двойных фигурных скобках — программа меняет только её, всё остальное остаётся как есть.</p>
+    <table class="tags">
+      <tr><td><code>{{ACT_NO}}</code></td><td>номер акта</td></tr>
+      <tr><td><code>{{ACT_DATE}}</code></td><td>дата акта словами («05 ноября 2026»)</td></tr>
+      <tr><td><code>{{EXECUTOR}}</code>, <code>{{CUSTOMER}}</code></td><td>строки «Исполнитель» и «Заказчик» (с реквизитами)</td></tr>
+      <tr><td><code>{{BASIS}}</code></td><td>«ДОГОВОР № … от «…» … г»</td></tr>
+      <tr><td colspan="2"><b>Строка таблицы с метками <code>{{ITEM_…}}</code> или <code>{{OBJECT}}</code> размножается на каждую позицию:</b></td></tr>
+      <tr><td><code>{{ITEM_NO}}</code> <code>{{ITEM_TITLE}}</code></td><td>номер и название позиции</td></tr>
+      <tr><td><code>{{ITEM_LINE}}</code></td><td>абзац повторяется по числу разделов; всё, что стоит в абзаце перед меткой (например «•»), копируется</td></tr>
+      <tr><td><code>{{OBJECT}}</code></td><td>объект (абзац удаляется, если объект пустой)</td></tr>
+      <tr><td><code>{{ITEM_QTY}}</code> <code>{{ITEM_UNIT}}</code> <code>{{ITEM_PRICE}}</code> <code>{{ITEM_SUM}}</code></td><td>количество, единица, цена, сумма</td></tr>
+      <tr><td><code>{{TOTAL}}</code> <code>{{COUNT}}</code> <code>{{TOTAL_WORDS}}</code></td><td>итого, число позиций, сумма прописью</td></tr>
+      <tr><td><code>{{VAT_LABEL}}</code> <code>{{VAT_VALUE}}</code></td><td>строка НДС</td></tr>
+      <tr><td><code>{{EXECUTOR_SIGN}}</code> <code>{{CUSTOMER_SIGN}}</code> <code>{{SIGNER}}</code></td><td>подписи сторон</td></tr>
+    </table>
+    <p class="muted">Метка должна быть набрана одним куском. Если Word «разорвал» её на части — не страшно, программа склеит.</p>
+    <div class="dlgbtn"><button class="btn primary">Понятно</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="js/zip.js"></script>
+<script src="js/ru.js"></script>
+<script src="js/docx.js"></script>
+<script src="js/extract.js"></script>
+<script src="js/template-data.js"></script>
+<script src="js/app.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/person.js"></script>
+<script src="js/ctpl.js"></script>
+<script src="js/contract.js"></script>
+</body>
+</html>

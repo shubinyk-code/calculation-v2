@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Расчёт П-образных компенсаторов</title>
+<meta name="description" content="Расчёт стального П-образного компенсатора методом упругого центра: удлинение, сила упругого отпора, напряжения, нагрузки на неподвижные опоры и перекрытия, расстановка по этажам, динамическая схема узла, экспорт в PDF и DXF.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f8a7e'/%3E%3Cpath d='M4 23 L10 23 L10 9 L22 9 L22 23 L28 23' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <a class="hub-home" href="../../index.html"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>На главную</a>
+    <h1>Расчёт П-образных компенсаторов</h1>
+    <p>Удлинение — вылет — усилия — нагрузки на опоры и перекрытия — узел в DXF и PDF</p>
+  </div>
+  <nav class="tabs-nav">
+    <button type="button" data-tab="calc">Расчёт</button>
+    <button type="button" data-tab="riser">Стояк</button>
+    <button type="button" data-tab="loads">Нагрузки</button>
+    <button type="button" data-tab="refs">Справочники</button>
+    <button type="button" data-tab="src">Источники</button>
+    <button type="button" data-tab="help">Методика</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ============================================================ РАСЧЁТ -->
+<section class="tab" id="tab-calc">
+  <div class="page">
+    <div class="cols-wide">
+
+      <!-- ------------------------------------------------ исходные данные -->
+      <div class="card">
+        <div class="ctitle"><b>Исходные данные</b><span class="muted small">всё пересчитывается сразу</span></div>
+
+        <fieldset class="grp">
+          <legend>Объект</legend>
+          <div class="form">
+            <label class="field"><span class="lbl">Объект / марка</span><input type="text" id="fObject" autocomplete="off"></label>
+            <label class="field"><span class="lbl">Система, участок</span><input type="text" id="fSystem" autocomplete="off"></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>Труба и материал</legend>
+          <div class="form tight">
+            <label class="field"><span class="lbl">Сортамент</span><select id="fSort"></select></label>
+            <label class="field"><span class="lbl">Dу, мм</span><select id="fDn"></select></label>
+            <label class="field"><span class="lbl">Dн, мм</span><input type="text" id="fDout" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Стенка s, мм</span><input type="text" id="fS" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Марка стали</span><select id="fSteel"></select></label>
+            <label class="field"><span class="lbl">Давление P, МПа</span><input type="text" id="fPress" inputmode="decimal"></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>Температуры и участок</legend>
+          <div class="form tight">
+            <label class="field"><span class="lbl">t монтажа, °C</span><input type="text" id="fTinst" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">t рабочая, °C</span><input type="text" id="fTwork" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Длина участка L, м</span><input type="text" id="fL" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Растяжка, %</span><input type="text" id="fStretch" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Плечо L1, м</span><input type="text" id="fL1" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Плечо L2, м</span><input type="text" id="fL2" inputmode="decimal"></label>
+            <label class="field chk"><input type="checkbox" id="fSym" checked> компенсатор посередине</label>
+            <label class="field"><span class="lbl">Плоскость</span>
+              <select id="fPlane">
+                <option value="h">горизонтальная</option>
+                <option value="v">вертикальная (стояк)</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>Геометрия компенсатора</legend>
+          <div class="form tight">
+            <label class="field"><span class="lbl">Радиус гиба R</span>
+              <select id="fRpreset">
+                <option value="1">R = 1,0·Dн (минимум по СП 124)</option>
+                <option value="1.5dn" selected>R = 1,5·Dу (ГОСТ 17375)</option>
+                <option value="2.5">R = 2,5·Dн</option>
+                <option value="3">R = 3·Dн (гнутый)</option>
+                <option value="4">R = 4·Dн (гнутый)</option>
+                <option value="man">задать вручную</option>
+              </select>
+            </label>
+            <label class="field"><span class="lbl">R, мм</span><input type="text" id="fR" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Вылет H, мм</span><input type="text" id="fH" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Спинка B, мм</span><input type="text" id="fB" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Связь B и H</span>
+              <select id="fBmode">
+                <option value="ratio" selected>B = k·H</option>
+                <option value="fixed">B задаётся вручную</option>
+              </select>
+            </label>
+            <label class="field"><span class="lbl">k = B/H</span><input type="text" id="fBratio" inputmode="decimal"></label>
+          </div>
+          <div class="actions">
+            <button type="button" id="btnPick" class="primary">Подобрать вылет H</button>
+            <span class="muted small">наименьший H, при котором напряжение укладывается в допускаемое</span>
+          </div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>Допускаемое напряжение</legend>
+          <div class="method-row">
+            <label><input type="radio" name="sigmaMode" value="ref" checked> по справочнику</label>
+            <label><input type="radio" name="sigmaMode" value="rd"> [σ] по РД 10-249-98</label>
+            <label><input type="radio" name="sigmaMode" value="manual"> вручную</label>
+          </div>
+          <div class="form tight" style="margin-top:8px">
+            <label class="field"><span class="lbl">[σ] вручную, МПа</span><input type="text" id="fSigmaMan" inputmode="decimal"></label>
+            <label class="field chk"><input type="checkbox" id="fUseM1" checked> учитывать m₁ (запас на отводы)</label>
+            <label class="field"><span class="lbl">E вручную, МПа</span><input type="text" id="fE" inputmode="decimal" placeholder="по таблице"></label>
+          </div>
+          <div class="muted small" id="sigmaWhy" style="margin-top:6px"></div>
+        </fieldset>
+
+        <fieldset class="grp">
+          <legend>Опоры, изоляция, этажи</legend>
+          <div class="form tight">
+            <label class="field"><span class="lbl">Тип подвижных опор</span><select id="fSupport"></select></label>
+            <label class="field"><span class="lbl">μ вручную</span><input type="text" id="fMu" inputmode="decimal" placeholder="по таблице"></label>
+            <label class="field"><span class="lbl">Пролёт опор, м</span><input type="text" id="fSpan" inputmode="decimal" placeholder="по СП 73"></label>
+            <label class="field"><span class="lbl">Изоляция δ, мм</span><input type="text" id="fInsThk" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Плотность изол., кг/м³</span><input type="text" id="fInsRho" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">γf</span><input type="text" id="fGammaF" inputmode="decimal"></label>
+            <label class="field"><span class="lbl">Этажей</span><input type="text" id="fFloors" inputmode="numeric"></label>
+            <label class="field"><span class="lbl">Высота этажа, м</span><input type="text" id="fFloorH" inputmode="decimal"></label>
+          </div>
+        </fieldset>
+
+        <div class="actions">
+          <button type="button" id="btnPdf" class="primary">Экспорт в PDF</button>
+          <button type="button" id="btnPrint">Печать</button>
+          <button type="button" id="btnDxfNode">DXF узла</button>
+          <button type="button" id="btnDxfRiser">DXF стояка</button>
+          <button type="button" id="btnSave">Сохранить</button>
+          <button type="button" id="btnOpen">Открыть</button>
+          <button type="button" id="btnReset">Сбросить</button>
+          <input type="file" id="fFile" accept=".pkomp,.json" style="display:none">
+        </div>
+      </div>
+
+      <!-- ------------------------------------------------ результаты -->
+      <div style="display:grid; gap:14px; min-width:0">
+
+        <div class="card">
+          <div class="ctitle"><b>Итог</b><span class="muted small" id="verdictShort"></span></div>
+          <div class="kpis" id="kpis"></div>
+          <div class="verdict" id="verdict" style="margin-top:9px"></div>
+          <div id="warnbox"></div>
+        </div>
+
+        <div class="card">
+          <div class="ctitle">
+            <b>Узел компенсатора</b>
+            <span class="muted small">все размеры меняются вместе с исходными данными</span>
+          </div>
+          <div class="svgbox" id="nodeSvg"></div>
+        </div>
+
+        <div class="card">
+          <div class="ctitle"><b>Расчёт по шагам</b><span class="muted small">то же, что уйдёт в PDF</span></div>
+          <pre class="report" id="report"></pre>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ СТОЯК -->
+<section class="tab" id="tab-riser">
+  <div class="page">
+    <div class="card">
+      <div class="ctitle"><b>Расстановка по этажам</b><span class="muted small">исходные данные — на вкладке «Расчёт»</span></div>
+      <div class="kpis" id="riserKpis"></div>
+      <div class="verdict" id="riserVerdict" style="margin-top:9px"></div>
+    </div>
+    <div class="card">
+      <div class="ctitle">
+        <b>Схема стояка</b>
+        <span>
+          <button type="button" id="btnDxfRiser2">DXF стояка</button>
+        </span>
+      </div>
+      <div class="svgbox riserbox" id="riserSvg"></div>
+    </div>
+    <div class="card txt">
+      <h3>Как читается схема</h3>
+      <ul>
+        <li>Стояк разбит на компенсирующие участки: длина каждого не больше предельной,
+            которая получается из условия σ ≤ [σ] для принятого компенсатора.</li>
+        <li>На границах участков — неподвижные опоры (косой крест по ГОСТ 21.205-93),
+            в середине участка — компенсатор.</li>
+        <li>Между ними — крепления (подвижные): по СП 73.13330.2016 п. 6.1.9 в жилых и
+            общественных зданиях их ставят через половину высоты этажа при высоте этажа
+            более 3 м, в производственных — не реже чем через 3 м.</li>
+        <li>Рядом с каждой неподвижной опорой подписана осевая нагрузка. На вертикальном
+            стояке она направлена вертикально и приходит на перекрытие.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ НАГРУЗКИ -->
+<section class="tab" id="tab-loads">
+  <div class="page narrow">
+    <div class="card">
+      <div class="ctitle"><b>Нагрузки на опоры и перекрытия</b>
+        <span class="muted small">СНиП 2.04.07-86*, приложение 8</span></div>
+      <div class="tscroll">
+        <table class="grid ref" id="tLoads">
+          <thead><tr><th class="l">Величина</th><th>Значение</th><th class="l">Формула</th><th class="l">Источник</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card txt">
+      <h3>Что и откуда</h3>
+      <p><b>Вертикальная нагрузка</b> на подвижную опору — формула (1) приложения 8:
+        <code>Fv = Gv · l</code>, где Gv — вес 1 м трубопровода с изоляцией и водой,
+        l — пролёт между подвижными опорами.</p>
+      <p><b>Горизонтальные от трения</b> — формулы (2), (3) и (5):
+        <code>Fhx = μx · Gh · l</code>, <code>Fhy = μy · Gh · l</code>,
+        а на неподвижную опору <code>Fтр = μ · Gh · L</code>, где L — длина трубопровода
+        от неподвижной опоры до компенсатора.</p>
+      <p><b>Сила упругой деформации</b> гибкого компенсатора — п. 4.7 приложения 8:
+        «определяемые расчётом труб на компенсацию тепловых удлинений». Это и есть Px
+        из раздела «Расчёт».</p>
+      <p><b>Сложение сил</b> — п. 5: на концевую неподвижную опору берётся сумма сил с одной
+        стороны, на промежуточную — разность сумм с обеих сторон, причём меньшая сумма
+        принимается с коэффициентом 0,7. Если суммы равны, по примечанию 2 берётся сумма
+        с одной стороны с коэффициентом 0,3.</p>
+      <p><b>Распора от давления нет.</b> Неуравновешенные силы внутреннего давления и
+        распорные усилия приложение 8 относит только к сальниковым (п. 4.3) и сильфонным
+        (п. 4.4) компенсаторам. П-образный компенсатор замкнут трубой, и давление его
+        не разжимает.</p>
+      <p><b>Коэффициент надёжности по нагрузке γf</b> в приложении 8 не задан: там нагрузки
+        нормативные. По умолчанию в программе γf = 1, то есть выводятся нормативные
+        значения; расчётные получайте умножением на γf по СП 20.13330 или по заданию
+        конструкторов.</p>
+      <div class="warnbox">
+        <div><b>О чём программа не судит.</b> Это расчёт самого компенсатора и нагрузок
+          от трубопровода. Прочность самой опорной конструкции, закладной детали, анкеров
+          и перекрытия — отдельная задача конструктора: программа даёт ему усилие, а не
+          заключение о несущей способности.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ СПРАВОЧНИКИ -->
+<section class="tab" id="tab-refs">
+  <div class="page">
+    <div class="cols2">
+      <div class="card">
+        <div class="ctitle"><b>Сортамент труб</b><span class="muted small" id="sortSrc"></span></div>
+        <div class="tscroll short"><table class="grid ref" id="tPipes">
+          <thead><tr><th>Dу</th><th>Dн, мм</th><th>s, мм</th><th>Dвн, мм</th><th>масса, кг/м</th><th>вода, кг/м</th></tr></thead>
+          <tbody></tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="ctitle"><b>Допускаемые напряжения [σ], МПа</b>
+          <span class="muted small">РД 10-249-98, табл. 2.1–2.2</span></div>
+        <div class="tscroll short"><table class="grid ref" id="tSteel">
+          <thead><tr><th class="l">Марка</th><th>20 °C</th><th>100</th><th>150</th><th>200</th><th>250</th><th>300</th><th>справ. [σ]изг</th></tr></thead>
+          <tbody></tbody></table></div>
+        <div class="muted small" style="margin-top:6px">
+          Последний столбец — допускаемое напряжение на изгиб для компенсаторов
+          по справочной методике (Громов/Шубин; то же у Горуновича и в методике ИжГТУ):
+          160 МПа для 10Г2С, Ст3сп и 120 МПа для сталей 10, 20, Ст2сп.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ctitle"><b>α·10⁻⁶ и E·10⁵ по температуре</b>
+          <span class="muted small">РД 10-249-98, справочные приложения</span></div>
+        <div class="tscroll short"><table class="grid ref" id="tAlpha">
+          <thead><tr><th class="l">Величина</th><th>20</th><th>100</th><th>150</th><th>200</th><th>250</th><th>300</th><th>350</th><th>400</th></tr></thead>
+          <tbody></tbody></table></div>
+        <div class="muted small" style="margin-top:6px">
+          α — средний коэффициент линейного расширения в интервале 20…t, 1/K.
+          В РД одна строка на все углеродистые и низколегированные стали:
+          «Ст3, 10, 20, 20К, 22К, 09Г2С, 15ГС, 16ГС, 12МХ, 15ХМ…».
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ctitle"><b>Коэффициенты трения в опорах</b>
+          <span class="muted small">табл. 1* прил. 8 СНиП 2.04.07-86*</span></div>
+        <div class="tscroll short"><table class="grid ref" id="tFric">
+          <thead><tr><th class="l">Тип опоры</th><th>μx</th><th>μy</th><th class="l">Источник</th></tr></thead>
+          <tbody></tbody></table></div>
+      </div>
+
+      <div class="card">
+        <div class="ctitle"><b>Расстояния между креплениями, м</b>
+          <span class="muted small">СП 73.13330.2016, табл. 2</span></div>
+        <div class="tscroll short"><table class="grid ref" id="tSpan">
+          <thead><tr><th>Dу, мм</th><th>без изоляции</th><th>с изоляцией</th></tr></thead>
+          <tbody></tbody></table></div>
+        <div class="muted small" style="margin-top:6px">
+          Для стояков — п. 6.1.9: в жилых и общественных зданиях крепления ставят через
+          половину высоты этажа (при высоте этажа более 3 м), в производственных —
+          не более чем через 3 м.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ctitle"><b>Расстояния между неподвижными опорами, м</b>
+          <span class="muted small">ИжГТУ, табл. 8.1 — ориентир</span></div>
+        <div class="tscroll short"><table class="grid ref" id="tLfix">
+          <thead><tr><th>Dу, мм</th><th>L, м</th></tr></thead>
+          <tbody></tbody></table></div>
+        <div class="muted small" style="margin-top:6px">
+          Это учебный ориентир для трубопроводов с П-образными компенсаторами.
+          Окончательное расстояние даёт расчёт: см. «предельная длина участка».
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ ИСТОЧНИКИ -->
+<section class="tab" id="tab-src">
+  <div class="page narrow">
+    <div class="card txt">
+      <h3>Откуда взято всё, что считает программа</h3>
+      <p>Список ниже — полный: любое число в расчёте либо задано вами, либо пришло
+         из одного из этих документов. Ссылки ведут на тот экземпляр, по которому
+         данные снимались.</p>
+      <div class="warnbox">
+        <div><b>Нормативная развилка.</b> СП 124.13330.2012 п. 10.1 отсылает к
+          РД 10-400-01, а сам РД с 01.01.2021 отменён «регуляторной гильотиной»
+          (ФЗ № 247-ФЗ). Действующий документ того же назначения — ГОСТ Р 55596-2013,
+          и его разработчики (они же авторы РД) прямо рекомендуют считать по нему.
+          Проверьте, какой документ требует ваша экспертиза.</div>
+      </div>
+    </div>
+    <div class="srclist" id="srcList"></div>
+  </div>
+</section>
+
+<!-- ============================================================ МЕТОДИКА -->
+<section class="tab" id="tab-help">
+  <div class="page narrow">
+    <div class="card txt">
+      <h3>Что и как считается</h3>
+      <p>Компенсатор рассматривается как плоская рама, защемлённая по концам, которой
+         задано взаимное смещение концов Δ. Задача решается теоремой Кастилиано;
+         чтобы не возиться со статическим и центробежным моментами, оси переносят
+         в упругий центр тяжести оси компенсатора — тогда S<sub>x</sub> = 0 и
+         J<sub>xy</sub> = 0, и сила упругого отпора выражается одной дробью.</p>
+      <p>Единственная вольность по сравнению со справочником: интегралы по оси берутся
+         аналитически по участкам (спинка, четыре отвода, два вылета, два плеча),
+         а не «по миллиметровке», как предлагал Соколов. Результат от этого только
+         точнее — проверка по опубликованному примеру ниже.</p>
+    </div>
+
+    <div class="card">
+      <div class="ctitle"><b>Формулы</b></div>
+      <div class="formulas" id="formulas"></div>
+    </div>
+
+    <div class="card txt">
+      <h3>Проверка расчётного модуля</h3>
+      <p>В статье С. Б. Горуновича «Расчёт П-образных компенсаторов» (РосТепло.ру, 2009)
+         приведена таблица № 2 с расчётом четырёх компенсаторов по справочной методике.
+         Программа воспроизводит её с расхождением 2–3 %:</p>
+      <div class="tscroll short"><table class="grid ref" id="tBench">
+        <thead><tr><th class="l">Компенсатор</th><th>H, м</th><th>B, м</th><th>b, м</th><th>R, м</th>
+          <th>Δ, м</th><th>σ по статье</th><th>σ здесь</th><th>расхождение</th></tr></thead>
+        <tbody></tbody></table></div>
+      <p class="muted small">Расхождение целиком приходится на коэффициент m₁: в статье он
+         приведён округлённо (для 530×12 указано «≈ 4,2»). Коэффициент жёсткости отводов
+         k совпадает с таблицей № 1 той же статьи точно.</p>
+    </div>
+
+    <div class="card txt">
+      <h3>Границы применимости</h3>
+      <ul>
+        <li>Компенсатор симметричный, с прямыми углами, из одной трубы, все четыре отвода
+            одного радиуса. Несимметричные схемы (L1 ≠ L2) считаются приближённо:
+            боковая сила P<sub>y</sub> принята нулевой — так же, как рекомендует
+            Горунович, поскольку на практике подвижные опоры стоят часто и асимметрия
+            случайна.</li>
+        <li>Не учитываются: вес самого компенсатора как изгибающая нагрузка, ветер,
+            сейсмика, просадки, циклическая прочность (выносливость), распор от давления
+            в осевых компенсаторах, защемление трубы в грунте при бесканальной прокладке.
+            Для всего этого нужен полный расчёт по ГОСТ Р 55596-2013 — например,
+            в СТАРТ-ПРОФ.</li>
+        <li>Коэффициент m₁ = 0,9/h<sup>2/3</sup> сильно повышает расчётное напряжение
+            (для больших диаметров вчетверо). Сам Горунович в выводах предлагает
+            «тело» справочной методики использовать без m₁, а допускаемое напряжение
+            брать по нормативу. Галочка «учитывать m₁» позволяет посмотреть оба варианта;
+            по умолчанию он включён как более строгий.</li>
+        <li>Плотность воды принята 1000 кг/м³ независимо от температуры — в запас,
+            так же, как считается вес воды в приложении 8 СНиП 2.04.07-86*.</li>
+      </ul>
+    </div>
+
+    <div class="card txt">
+      <h3>Экспорт</h3>
+      <ul>
+        <li><b>PDF</b> — готовый файл: схема узла, расчёт по шагам, схема стояка, источники.
+            Страницы собираются растром (иначе в PDF без встроенного шрифта не получить
+            кириллицу), поэтому текст в нём не выделяется.</li>
+        <li><b>Печать</b> — тот же материал, но векторный: в диалоге печати выберите
+            «Сохранить как PDF», если нужен файл с выделяемым текстом.</li>
+        <li><b>DXF</b> — узел и схема стояка, версия R12, единицы — миллиметры,
+            кодировка подписей CP1251 ($DWGCODEPAGE = ANSI_1251). Слои: ТРУБОПРОВОД,
+            ОСИ, ОПОРЫ, РАЗМЕРЫ, ТЕКСТ, СТРОИТ. Отводы — настоящие дуги.</li>
+        <li><b>Сохранить / Открыть</b> — файл <code>.pkomp</code> со всеми исходными
+            данными, обычный JSON.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div id="printroot"></div>
+<div class="toast" id="toast"></div>
+
+<script src="js/util.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/report.js"></script>
+<script src="js/pdfout.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>

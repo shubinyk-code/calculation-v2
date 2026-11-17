@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ВК · Расчёт по СП 30.13330.2020</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="topbar no-print">
+    <a class="hub-home hub-home--icon" href="../../index.html" title="На главную" aria-label="На главную"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></a>
+    <div class="brand">ВК<span>СП 30.13330.2020</span></div>
+
+    <input id="projectName" class="name" type="text" value="Без названия" title="Название проекта">
+
+    <label class="field">Коэффициент α
+        <select id="alphaMode" title="Как снимать α с таблиц приложения Б между их узлами">
+            <option value="interp">Интерполяция между узлами</option>
+            <option value="node">По ближайшему большему узлу</option>
+        </select>
+    </label>
+
+    <button id="run" class="primary">Расчёт</button>
+
+    <span id="status" class="status"></span>
+
+    <div class="spacer"></div>
+
+    <button id="excelBtn" title="Выгрузить таблицы и расчёт в книгу Excel">В Excel</button>
+    <button id="wordBtn" title="Выгрузить таблицы и расчёт в документ Word">В Word</button>
+    <button id="printBtn">Печать</button>
+    <button id="saveBtn">Сохранить…</button>
+    <button id="openBtn">Открыть…</button>
+    <button id="newBtn">Новый</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+</header>
+
+<nav class="tabs no-print">
+    <button data-tab="consumers" class="active">Потребители</button>
+    <button data-tab="totals">Итоги и зоны</button>
+    <button data-tab="riser">Стояки канализации</button>
+    <button data-tab="trace">Разбор расчёта</button>
+    <button data-tab="ref">Справочник</button>
+</nav>
+
+<main>
+
+<!-- ===================== Потребители ================================== -->
+<section id="tab-consumers">
+
+    <div class="card no-print">
+        <h2>Объект</h2>
+        <div class="row">
+            <label class="field wide">Объект
+                <input id="objectName" type="text" placeholder="Парковый 9, 10">
+            </label>
+            <label class="field wide">Адрес
+                <input id="objectAddress" type="text">
+            </label>
+            <label class="field wide">Примечание
+                <input id="objectNote" type="text" placeholder="По этапам, крайний вариант">
+            </label>
+        </div>
+
+        <h3>Группы — раскладка формы баланса</h3>
+        <p class="hint">
+            Группа — это раздел формы: этап, секция, корпус. Она отвечает только за
+            то, как строки разложены в балансе, и <b>не</b> за то, что во что
+            суммируется: своды задаются на вкладке «Итоги и зоны», и потребитель
+            входит в несколько итогов сразу, оставаясь в одной группе.
+        </p>
+        <div class="chips" id="groupsBox"></div>
+        <div class="row" style="margin-top:8px">
+            <button id="addGroup" class="small">+ Группа</button>
+        </div>
+    </div>
+
+    <div class="card no-print">
+        <h2>Потребители</h2>
+        <p class="hint">
+            <b>Два количества.</b> Суточное идёт в объём <code>q_T = q_u · U / 1000</code>,
+            часовое — в вероятность действия приборов <code>P = q_hr,u · U / (3600 · q0 · N)</code>,
+            а из неё в часовой и секундный расходы. В формах их пишут через дробь —
+            «291/620». Если часовое не задано, берётся суточное.
+        </p>
+
+        <!--
+            Список потребителей таблицы А.2 для поля «Наименование».
+            Заполняется из справочника, включая строки, заведённые в проекте.
+        -->
+        <datalist id="normNames"></datalist>
+
+        <div class="scroll">
+            <table id="consumersTable">
+                <thead>
+                    <tr>
+                        <th>№</th>
+                        <th class="left" style="min-width:200px">Наименование потребителя</th>
+                        <th class="left" style="min-width:120px">Группа</th>
+                        <th class="left" style="min-width:220px">Норма — таблица А.2</th>
+                        <th class="left" style="min-width:200px">Обоснование</th>
+                        <th>Техно-<br>логический<br>процесс</th>
+                        <th>Часов<br>работы</th>
+                        <th>U сут.</th>
+                        <th>U час.</th>
+                        <th>N<br>приборов</th>
+                        <th>Изме-<br>ритель</th>
+                        <th>q_u,<br>л/сут</th>
+                        <th>q_hr,u,<br>л/ч</th>
+                        <th>Качество<br>воды</th>
+                        <th class="left" style="min-width:130px">Источник</th>
+                        <th class="left" style="min-width:150px">Водоотведение</th>
+                        <th>Потери,<br>%</th>
+                        <th>q0_s,<br>л/с</th>
+                        <th class="left" style="min-width:120px">Примечание</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="consumersBody"></tbody>
+            </table>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+            <button id="addConsumer" class="small">+ Потребитель</button>
+        </div>
+    </div>
+
+    <div class="card no-print">
+        <h2>Прочие расходы — полив, пожаротушение</h2>
+        <p class="hint">
+            Расходы, которые не считаются по вероятности действия приборов и задаются
+            прямо. В своды по формулам (1) и (4) они не входят — складывать
+            вероятностный расход с заданным нельзя, — а в баланс и в таблицу расходов
+            попадают отдельными строками. Суточный объём считается как
+            <code>количество × норма / 1000</code>, либо задаётся прямо.
+        </p>
+
+        <div class="scroll">
+            <table id="extrasTable">
+                <thead>
+                    <tr>
+                        <th class="left" style="min-width:220px">Наименование</th>
+                        <th class="left" style="min-width:120px">Группа</th>
+                        <th>Ед.</th>
+                        <th>Кол-во</th>
+                        <th>Норма,<br>л/ед.</th>
+                        <th>м³/сут</th>
+                        <th>л/с</th>
+                        <th>В баланс</th>
+                        <th class="left" style="min-width:140px">Примечание</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="extrasBody"></tbody>
+            </table>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+            <button id="addExtra" class="small">+ Расход</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Баланс водопотребления и водоотведения</h2>
+        <div id="balanceTable"></div>
+    </div>
+
+</section>
+
+<!-- ===================== Итоги и зоны ================================= -->
+<section id="tab-totals" class="hidden">
+
+    <div class="card no-print">
+        <h2>Итоги</h2>
+        <p class="hint">
+            Итог — это <b>выборка</b>, а не место хранения. Потребитель лежит в списке
+            один раз и входит в любое число итогов: и в «Итого по жилым помещениям»,
+            и в «1 зона», и в «ИТОГО ПО ОБЪЕКТУ». Свод считается по формулам (1) и (4),
+            то есть через общую вероятность действия приборов, а не сложением:
+            4,656 + 1,610 л/с дают вместе 5,222 л/с, а не 6,266.
+        </p>
+        <div class="chips" id="setsBox"></div>
+        <div class="row" style="margin-top:8px">
+            <button id="addSet" class="small">+ Итог</button>
+        </div>
+    </div>
+
+    <div class="card no-print">
+        <h2>Что входит в каждый итог</h2>
+        <p class="hint">
+            Галочка — потребитель выбран прямо. Точка — попал через вложенный итог;
+            снять её можно только там, где он выбран прямо.
+        </p>
+        <div id="matrixBox"></div>
+    </div>
+
+    <div class="card no-print">
+        <h2>Вложенность итогов</h2>
+        <p class="hint">
+            «ИТОГО ПО ОБЪЕКТУ» собирается из «Итого по жилым» и «Итого по встроенным»,
+            а не перечисляет потребителей заново: добавили секцию в жилую часть — она
+            сама попала в объектный итог. Потребитель, попавший в свод двумя путями,
+            считается один раз. Клетки, дающие кольцо, погашены.
+        </p>
+        <div id="nestingBox"></div>
+    </div>
+
+    <div class="card">
+        <h2>Основные показатели по системе водоснабжения и водоотведения</h2>
+        <div id="totalsResult"></div>
+    </div>
+
+    <div class="card">
+        <h2>Нагрузка на горячее водоснабжение</h2>
+        <div class="row no-print">
+            <label class="field wide">Считать по итогу
+                <select id="heatSet"></select>
+            </label>
+            <label class="field">t горячей, °C
+                <input id="hotT" type="number" value="60" step="1">
+            </label>
+            <label class="field">t холодной, °C
+                <input id="coldT" type="number" value="5" step="1">
+            </label>
+            <label class="field">Потери в трубопроводах, кВт
+                <input id="heatLoss" type="number" value="0" step="1"
+                       title="Даёт тепловой расчёт системы ГВС, здесь не считается">
+            </label>
+        </div>
+        <div id="heatResult"></div>
+    </div>
+
+</section>
+
+<!-- ===================== Стояки канализации =========================== -->
+<section id="tab-riser" class="hidden">
+
+    <div class="card no-print">
+        <h2>Стояк: исходные данные</h2>
+        <p class="hint">
+            Проверка на срыв гидрозатвора. Когда по стояку идёт сток, он увлекает
+            за собой воздух, и над местом сброса возникает разрежение. Если оно
+            превысит высоту запирающего слоя в сифоне, воду из гидрозатвора вытянет
+            в стояк. Само разрежение СП 30 считать не заставляет: приложение К даёт
+            готовую пропускную способность, полученную из условия, что разрежение
+            гидрозатворы не срывает. Проверка сводится к <code>q_s ≤ q_К</code>.
+        </p>
+
+        <div class="row">
+            <label class="field wide">Марка стояка
+                <input id="riserMark" type="text" value="Ст К1-1">
+            </label>
+
+            <label class="field wide">Норма по таблице А.2
+                <select id="riserNorm"></select>
+            </label>
+        </div>
+
+        <div class="row">
+            <label class="field">Высота этажа, м
+                <input id="floorHeight" type="number" value="3" min="1" step="0.1">
+            </label>
+
+            <div class="field wide" id="riserSummary"></div>
+        </div>
+
+        <div class="row">
+            <label class="check">
+                <input id="byFixtures" type="checkbox">
+                Расчёт по приборам — вероятность одна на стояк, по этажам суммируются приборы
+            </label>
+        </div>
+
+        <div class="row hidden" id="byFixturesFields">
+            <label class="field">Приборов на стояке всего N
+                <input id="totalFixtures" type="number" min="0" step="1"
+                       title="Пусто или ноль — считается как приборы на этаже × этажи">
+            </label>
+
+            <label class="field">Потребителей на стояке всего U
+                <input id="totalUsers" type="number" min="0" step="1"
+                       title="Пусто или ноль — считается как жильцы на этаж × этажи">
+            </label>
+
+            <div class="field wide" id="byFixturesSummary"></div>
+        </div>
+
+        <p class="hint hidden" id="byFixturesHint">
+            Вероятность действия приборов определяется <b>один раз по стояку в целом</b>:
+            по общему числу приборов N и общему числу потребителей U находится общее
+            <code>N·P</code>, из него <code>P = N·P / N</code> — вероятность на один прибор.
+            Дальше по этажам меняется только число приборов: <code>N_k · P → α → q</code>.
+            Пока этажи типовые, оба способа дают одно и то же — вероятность и так выходит
+            одинаковой. Расходятся они там, где стояк неравномерен: двухуровневые квартиры
+            наверху, встройка внизу, или P взята из расчёта по зданию целиком. Для таких
+            случаев N и U задаются прямо, а не выводятся из этажной раскладки.
+        </p>
+
+        <h3>Участки стояка</h3>
+        <p class="hint">
+            Стояк редко бывает однородным: на типовых этажах пять приборов, на
+            верхних — шесть, внизу встроенные помещения со своим набором. Поэтому
+            этажи задаются участками: «с 1 по 16 — такой набор, с 17 по 25 — такой».
+            Однородный стояк — это один участок от первого этажа до последнего.
+        </p>
+        <p class="hint">
+            С каждого участка берутся два числа: сколько приборов на этаже (N) и
+            расход стоков от прибора с наибольшим водоотведением (q0_s). Второе —
+            не сумма и не среднее: по формуле (5) прибавляется расход ОДНОГО
+            прибора, самого мощного по стокам. В жилье это унитаз со смывным
+            бачком, 1,6 л/с; ищется он по всему стояку, а не по участку.
+        </p>
+
+        <div id="sectionsBox"></div>
+
+        <div class="row" style="margin-top:10px">
+            <button id="addSection" class="small">+ Участок</button>
+        </div>
+
+        <h3>Исполнение стояка — приложение К</h3>
+        <div class="row">
+            <label class="check">
+                <input id="vented" type="checkbox" checked>
+                Вентилируемый — с вытяжной частью выше кровли
+            </label>
+        </div>
+
+        <div class="row">
+            <label class="field">Материал
+                <select id="material"></select>
+            </label>
+
+            <label class="field">Ø стояка, мм
+                <select id="riserMm"></select>
+            </label>
+
+            <label class="field">Ø поэтажного отвода, мм
+                <select id="branchMm"></select>
+            </label>
+
+            <label class="field">Угол присоединения отвода
+                <select id="angleDeg"></select>
+            </label>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Результат проверки</h2>
+        <div id="riserVerdict"></div>
+        <div id="riserResult"></div>
+    </div>
+
+    <div class="card no-print" id="altCard">
+        <h2>Исполнения, которые проходят</h2>
+        <div id="riserAlternatives"></div>
+    </div>
+
+</section>
+
+<!-- ===================== Разбор ======================================= -->
+<section id="tab-trace" class="hidden">
+    <div class="card no-print">
+        <h2>Что разбирать</h2>
+        <div class="row">
+            <label class="field wide">Итог или потребитель
+                <select id="traceTarget"></select>
+            </label>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Разбор расчёта: водопотребление</h2>
+        <div id="traceWater" class="trace"></div>
+    </div>
+
+    <div class="card">
+        <h2>Разбор расчёта: стояк канализации</h2>
+        <div id="traceRiser" class="trace"></div>
+    </div>
+</section>
+
+<!-- ===================== Справочник =================================== -->
+<section id="tab-ref" class="hidden">
+    <div class="card">
+        <h2>Таблица А.1 — расходы воды и стоков приборами</h2>
+        <div class="scroll"><table id="refFixtures"></table></div>
+    </div>
+
+    <div class="card">
+        <h2>Таблица А.2 — нормы расхода воды потребителями</h2>
+        <p class="hint">
+            Таблицу можно править и дополнять. В перенесённом нормативе тридцать
+            строк — то, что чаще всего нужно жилью и встроенным помещениям; если
+            объекту понадобилась прачечная, баня или лаборатория, строка заводится
+            здесь и сразу появляется в выборе потребителя. Свои строки и правки
+            хранятся <b>в проекте</b>, а не в программе, и уезжают вместе с файлом.
+            Столбец «Источник» показывает, где норматив, а где своё; крестик у
+            правки возвращает значения СП.
+        </p>
+        <div class="scroll"><table id="refNorms"></table></div>
+        <div class="row no-print" style="margin-top:10px">
+            <button id="addNorm" class="small">+ Норма</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Приложение К — пропускная способность стояков</h2>
+        <p class="hint">
+            Угол присоединения поэтажного отвода меняет пропускную способность
+            почти вдвое: у стояка Ø110 из ПВХ под 45° это 8,22 л/с, под 87,5° —
+            4,83 л/с. Это следствие тройника, а не диаметра.
+        </p>
+        <div class="scroll"><table id="refStacks"></table></div>
+    </div>
+</section>
+
+</main>
+
+<script src="js/sp30-data.js"></script>
+<script src="js/format.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/demand.js"></script>
+<script src="js/consumers.js"></script>
+<script src="js/riser.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/docx.js"></script>
+<script src="js/report.js"></script>
+<script src="js/ui-consumers.js"></script>
+<script src="js/ui-totals.js"></script>
+<script src="js/ui-riser.js"></script>
+<script src="js/ui-ref.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

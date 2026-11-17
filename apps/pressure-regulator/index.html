@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Регулятор давления перед насосной станцией</title>
+<meta name="description" content="Нужен ли регулятор давления «после себя» перед насосами ХПВ, ВПВ и АПТ при колебаниях давления в наружной сети: расчёт настройки, подбор и живая схема ввода.">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <a class="hub-home" href="../../index.html"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>На главную</a>
+    <h1>Регулятор давления перед насосной станцией</h1>
+    <p>Колебания давления в наружной сети → нужен ли регулятор «после себя», его настройка и подбор</p>
+  </div>
+  <div class="top-actions">
+    <button type="button" id="btnExample">Пример из пособия</button>
+    <button type="button" id="btnNew">Новый</button>
+    <button type="button" id="btnOpen">Открыть…</button>
+    <button type="button" id="btnSave">Сохранить</button>
+    <button type="button" id="btnPrint" class="primary">Отчёт / печать</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="inputs" id="inputs">
+    <section class="panel">
+      <label class="field wide"><span class="lbl">Объект</span><span class="ctl"><input type="text" id="projTitle" placeholder="Название проекта"></span></label>
+    </section>
+
+    <section class="panel">
+      <h2>1. Наружная сеть и ввод</h2>
+      <div class="form" id="inletForm"></div>
+      <div class="radio-row">
+        <span class="lbl">Регулятор ставится</span>
+        <label><input type="radio" name="layout" value="separate"> на каждую установку</label>
+        <label><input type="radio" name="layout" value="common"> один на общем вводе</label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>2. Насосные установки</h2>
+      <div class="tabs" id="sysTabs"></div>
+      <div class="form" id="sysForm"></div>
+    </section>
+
+    <details class="panel">
+      <summary><h2>Настройки и допущения</h2></summary>
+      <div class="form" id="settingsForm"></div>
+    </details>
+  </aside>
+
+  <section class="outputs" id="outputs">
+    <section class="card live">
+      <div class="live-grid">
+        <div class="live-item wide">
+          <div class="live-lbl">Напор в наружной сети сейчас <b id="hNetVal"></b></div>
+          <input type="range" id="hNet" min="0" max="60" step="0.5">
+          <div class="marks" id="hNetMarks"></div>
+        </div>
+        <div class="live-item">
+          <div class="live-lbl">Водоразбор ХПВ <b id="phiVal"></b></div>
+          <input type="range" id="phi" min="0" max="120" step="1">
+        </div>
+        <div class="live-item">
+          <div class="live-lbl">Пожарные насосы (ВПВ, АПТ)</div>
+          <div class="seg" id="fireSeg">
+            <button type="button" data-fire="off">дежурный режим</button>
+            <button type="button" data-fire="q0">пуск, краны закрыты</button>
+            <button type="button" data-fire="fire">тушение</button>
+          </div>
+        </div>
+        <div class="live-item row">
+          <label class="check"><input type="checkbox" id="regOn" checked> регуляторы установлены</label>
+          <button type="button" id="btnPlay">▶ Сутки</button>
+          <span class="clock" id="clock"></span>
+        </div>
+      </div>
+      <div class="scheme-wrap" id="scheme"></div>
+      <p class="hint-line">Двигайте ползунки: давления на схеме и графиках пересчитываются сразу. Снимите галочку «регуляторы установлены», чтобы увидеть, что будет без них. Щелчок по строке схемы выбирает установку.</p>
+    </section>
+
+    <section class="card">
+      <h2>Итог по установкам</h2>
+      <div class="table-wrap" id="summary"></div>
+      <div id="commonCard" hidden></div>
+    </section>
+
+    <section class="card">
+      <h2>Установка: <span id="detailTitle"></span></h2>
+      <div class="charts">
+        <figure class="chart">
+          <figcaption>Насос и сеть — <span id="qhTitle"></span></figcaption>
+          <div id="qh"></div>
+          <div class="legend" id="qhLegend"></div>
+        </figure>
+        <figure class="chart">
+          <figcaption>Давления по пути воды — <span id="ladderTitle"></span></figcaption>
+          <div id="ladder"></div>
+          <div class="legend" id="ladderLegend"></div>
+        </figure>
+      </div>
+      <div id="details"></div>
+    </section>
+
+    <section class="card info">
+      <h2>Методика, нормы и допущения</h2>
+
+      <details open>
+        <summary>Формулы (пособие ООО «ВИЛО РУС», 2024) — в метрах водяного столба</summary>
+        <div class="formulas">
+          <div><span class="fl">Напор на входе</span> Н<sub>вх.min</sub> = Н<sub>гар.min</sub> − Δh<sub>ввод</sub> + Δz; &nbsp; Н<sub>вх.max</sub> = Н<sub>макс</sub> + Δz</div>
+          <div><span class="fl">Насосы без ПЧ</span> регулятор нужен при Н<sub>вх.max</sub> − Н<sub>вх.min</sub> &gt; 10 м; &nbsp; Н<sub>ред.max</sub> = Н<sub>вх.min</sub> + 10 м</div>
+          <div><span class="fl">Насосы с ПЧ</span> Н<sub>ред.max</sub> = Н<sub>вых</sub> − H<sup>min</sup><sub>Q=0</sub>; &nbsp; регулятор нужен при Н<sub>вх.max</sub> &gt; Н<sub>ред.max</sub></div>
+          <div><span class="fl">Корпус насоса</span> Н<sub>max</sub> = Н<sub>вх.max</sub> + H<sup>max</sup><sub>Q=0</sub> → PN10 (≈ 100 м), PN16 (≈ 160 м), PN25…</div>
+          <div><span class="fl">Потребный напор</span> Н<sub>потр</sub> = Н<sub>Г</sub> + (р<sub>3</sub> − р<sub>1</sub>)/ρg + Δh<sub>вс</sub> + Δh<sub>наг</sub>: рост р<sub>1</sub> на входе опускает характеристику сети, и насос без ПЧ уходит вправо по расходу</div>
+        </div>
+        <p>Рекомендации пособия: регулятор «после себя» должен снижать давление и в динамическом, и в статическом режиме; уставка — ближе к середине диапазона настройки; ПЧ компенсирует рост давления только до минимальной частоты 20…25 Гц; корпус насоса проверять с учётом максимального давления на входе.</p>
+      </details>
+
+      <details>
+        <summary>Что говорят нормы</summary>
+        <ul>
+          <li><b>СП 30.13330.2020, п. 3.1.9</b> — гарантированный напор задаётся в точке подключения к коммунальной сети на период максимального водоразбора. Это минимум, а не рабочее давление: ночью в сети может быть заметно больше.</li>
+          <li><b>СП 30.13330.2020, п. 13.13</b> — насосы ХПВ с переменным водоразбором при колебаниях напора в наружной сети более 0,1 МПа — с частотным регулированием; без него — только при водонапорном или гидропневматическом баке.</li>
+          <li><b>СП 10.13330.2020, п. 13.12</b> — регуляторы давления предусматриваются на вводе, если давление в наружной сети выше проектного и способно нарушить прочность трубопроводов и оборудования ВПВ; а также после пожарных насосов на участках с превышением давления и на секционированных по высоте участках.</li>
+          <li><b>СП 485.1311500.2020</b> — требований к колебаниям давления на вводе для АПТ нет.</li>
+          <li>Порог 10 м (1 бар) для насосов без ПЧ и формулы уставки — рекомендация производителя, а не норма.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary>Что добавлено сверх пособия (оценки)</summary>
+        <ul>
+          <li><b>Подбор регулятора</b>: Kvs ≥ Q/√(Δh<sub>доп</sub>/K), типоразмер по таблице «Ду : Kvs» и скорости, диапазон настройки, PN по Н<sub>вх.max</sub>, отношение напоров до/после не больше 3 : 1. Таблицы типовые — правятся в настройках под каталог производителя. Kvs и PN по определению в барах, поэтому только в них участвует K (м в 1 бар).</li>
+          <li><b>Разница отметок</b> Δz точки подключения и оси насосов — в пособии не учитывается.</li>
+          <li><b>Потери в открытом регуляторе</b> при гарантированном напоре — (Q/Kvs)²·K, их надо добавить к напору насоса.</li>
+          <li><b>Живая модель</b>: кривая насоса — парабола через H<sub>Q=0</sub> и рабочую точку, частота — по законам подобия, сеть — Н<sub>ст</sub> + bQ², потери на вводе ∝ Q². Она показывает характер явления, а не заменяет подбор по каталогу.</li>
+        </ul>
+      </details>
+
+      <details>
+        <summary>Чего в пособии не хватает для расчёта</summary>
+        <ul>
+          <li>Потери «−0,5 бар» (5 м) между точкой подключения и насосами не расшифрованы — вводите свои (ввод, водомерный узел, фильтр, арматура).</li>
+          <li>В примере ХПВ принято р<sub>вых</sub> = 5,8 бар (58 м) без вывода. По напору насоса выходит 10 + 50 = 60 м, и тогда Н<sub>ред.max</sub> = 44 м. Вывод тот же — регулятор нужен. В примере программы стоит 58 м, чтобы совпало с пособием.</li>
+          <li>Для ХПВ 2 зоны, ВПВ 2 зоны и АПТ пример не досчитан: нет напоров насосов при Q = 0. Программа подставляет оценку 1,3·H и помечает это.</li>
+          <li>В пособии давления в барах при 1 бар = 10 м (точно 10,2 м). Программа считает в метрах, K нужен только для PN и Kvs и задаётся в настройках.</li>
+          <li>Нет выбора типоразмера регулятора, диапазона пружины, проверки на кавитацию и решения по надёжности противопожарного ввода (резервирование, обвод).</li>
+        </ul>
+      </details>
+    </section>
+  </section>
+</main>
+
+<section id="report" class="report"></section>
+
+<script src="js/format.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>

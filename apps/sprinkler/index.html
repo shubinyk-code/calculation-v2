@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>АУПТ · Гидравлика по плану</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="../../hub/hub-home.css">
+</head>
+<body>
+
+<header class="topbar">
+    <a class="hub-home hub-home--icon" href="../../index.html" title="На главную" aria-label="На главную"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></a>
+    <div class="brand">АУПТ<span>Гидравлика по СП 485</span></div>
+
+    <input id="projectName" class="name" type="text" title="Название объекта — оно же имя файла">
+
+    <label class="field inline sysfield">Система
+        <select id="systemSelect"></select>
+    </label>
+    <button id="systemsBtn" title="Объект и системы: АПТ по плану, ВПВ по стоякам">Системы…</button>
+
+    <div class="history">
+        <button id="undoBtn" disabled>↶ Отменить</button>
+        <button id="redoBtn" disabled>↷ Вернуть</button>
+    </div>
+
+    <div id="summary" class="summary"></div>
+
+    <div class="spacer"></div>
+
+    <button id="underlayBtn" title="Картинка плана PNG или JPG. Снимок экрана можно вставить прямо Ctrl+V">Подложка…</button>
+    <button id="dxfBtn" title="Чертёж подложкой: DXF из пространства модели AutoCAD или векторный PDF листа. Файл .dwg нужно сохранить как DXF">DXF / PDF…</button>
+    <button id="libBtn" title="Объекты и ревизии: переключиться на другой объект, вернуться к ревизии">Объекты</button>
+    <button id="libRev" class="lib-rev" title="Ревизия, на которой построена рабочая копия"></button>
+    <button id="revBtn" title="Зафиксировать нынешнее состояние объекта ревизией (Р00, Р01 …)">+ Ревизия</button>
+    <button id="openBtn">Открыть…</button>
+    <button id="saveBtn" title="Ctrl+S">Сохранить</button>
+    <button id="newBtn">Новый</button>
+    <a class="toplink" href="tests.html" target="_blank" title="Проверка расчёта; библиотека объектов — tests-library.html">Самопроверка</a>
+
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    <input type="file" id="underlayInput" accept="image/*" hidden>
+    <input type="file" id="dxfInput" accept=".dxf,.DXF,.pdf,.PDF,.dwg,.DWG" hidden>
+</header>
+
+<main id="aptMain">
+
+    <aside class="panel left">
+        <h3>Инструменты</h3>
+        <div class="tools" id="tools">
+            <button data-tool="select">Выбор <kbd>V</kbd></button>
+            <button data-tool="source" class="t-src">Ввод <kbd>I</kbd></button>
+            <button data-tool="main" class="t-main">Магистраль <kbd>M</kbd></button>
+            <button data-tool="ray" class="t-ray">Луч с оросителями <kbd>L</kbd></button>
+            <button data-tool="sprinkler" class="t-spr">Ороситель <kbd>O</kbd></button>
+            <button data-tool="cu" class="t-cu">Узел управления <kbd>U</kbd></button>
+            <button data-tool="pk" class="t-pk">Пожарный кран <kbd>K</kbd></button>
+            <button data-tool="zone" class="t-zone">Расчётная зона <kbd>Z</kbd></button>
+            <button data-tool="corridor" class="t-corr" title="Коридор жилого дома выше 75 м: ось и квартирные двери">Коридор <kbd>D</kbd></button>
+            <button data-tool="measure">Рулетка <kbd>R</kbd></button>
+            <button data-tool="erase" class="t-erase">Удалить <kbd>E</kbd></button>
+        </div>
+
+        <h3>Выбранное</h3>
+        <div id="inspector" class="inspector"></div>
+    </aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <span class="vb-label">Подложка</span>
+            <label class="check inline ul-only"><input id="ulVisible" type="checkbox" checked> видна</label>
+            <input id="ulOpacity" class="ul-only" type="range" min="0.1" max="1" step="0.05" title="Прозрачность подложки">
+            <button data-tool="calibrate" class="ul-only" title="Два щелчка по известному размеру">Масштаб</button>
+            <button data-tool="underlay" class="ul-only">Сдвинуть</button>
+            <button id="ulRemove" class="ul-only">Убрать</button>
+            <span class="vb-empty">не загружена — кнопка «Подложка…» или Ctrl+V</span>
+
+            <span class="vb-label dxf-only" id="dxfLabel">Чертёж</span>
+            <label class="check inline dxf-only"><input id="dxfVisible" type="checkbox" checked> виден</label>
+            <button data-tool="dxf" class="dxf-only">Сдвинуть чертёж</button>
+            <button id="dxfRemove" class="dxf-only">Убрать чертёж</button>
+
+            <div class="spacer"></div>
+            <button id="backToRiser" class="primary" hidden title="Вернуться к схеме стояка">← Стояк</button>
+            <button id="fitBtn" title="H">Вписать</button>
+            <button id="pngBtn">Картинка плана</button>
+        </div>
+
+        <div class="canvas-wrap">
+            <canvas id="plan" tabindex="0"></canvas>
+        </div>
+
+        <div class="statusbar"><span id="hint" class="hint-line"></span></div>
+    </section>
+
+    <div id="splitter" class="splitter" title="Потяните, чтобы изменить ширину"></div>
+
+    <aside class="panel right" id="rightPanel">
+        <div class="tabs" id="tabs"></div>
+        <div class="tabbody" id="tabBody"></div>
+    </aside>
+
+</main>
+
+<main id="vpvMain" hidden>
+    <aside class="panel left vpv-form" id="vpvForm"></aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <span class="vb-label">Схема стояков ВПВ</span>
+            <div class="spacer"></div>
+            <button id="vpvZoomOut" title="Мельче">−</button>
+            <button id="vpvZoomIn" title="Крупнее">+</button>
+        </div>
+        <div class="vpv-canvas" id="vpvCanvas"></div>
+        <div class="statusbar"><span id="vpvHint" class="hint-line">Вводите данные слева — схема и расчёт обновляются сразу.</span></div>
+    </section>
+
+    <aside class="panel right" id="vpvRight">
+        <div class="tabs" id="vpvTabs"></div>
+        <div class="tabbody" id="vpvBody"></div>
+    </aside>
+</main>
+
+
+
+<main id="flrMain" hidden>
+    <aside class="panel left vpv-form" id="flrForm"></aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <span class="vb-label">Схема стояков АПТ по этажам</span>
+            <button id="flrViewFlat" title="Отростки от стояка, как на принципиальной схеме">Плоская</button>
+            <button id="flrViewIso" title="Сеть этажа из плана в аксонометрии">Изометрия</button>
+            <div class="spacer"></div>
+            <span class="vb-empty">щелчок по этажу — открыть план</span>
+            <button id="flrZoomOut" title="Мельче">−</button>
+            <button id="flrZoomIn" title="Крупнее">+</button>
+        </div>
+        <div class="vpv-canvas" id="flrCanvas"></div>
+        <div class="statusbar"><span id="flrHint" class="hint-line">Этажи и секции — как в ВПВ; сеть этажа — план АПТ, открывается щелчком по этажу.</span></div>
+    </section>
+
+    <aside class="panel right" id="flrRight">
+        <div class="tabs" id="flrTabs"></div>
+        <div class="tabbody" id="flrBody"></div>
+    </aside>
+</main>
+<main id="tchMain" hidden>
+    <aside class="panel left tch-form" id="tchForm"></aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <span class="vb-label">Записка</span>
+            <button data-action="tch-template">Шаблон .docx…</button>
+            <span class="vb-empty">шаблон: <b id="tchTemplate">не загружен</b></span>
+            <button data-action="tch-forget">Забыть</button>
+            <div class="spacer"></div>
+            <button data-action="tch-print">Печать / PDF</button>
+            <button data-action="tch-docx" class="primary">Скачать .docx</button>
+        </div>
+        <div class="tch-preview" id="tchPreview"></div>
+        <div class="statusbar"><span id="tchHint" class="hint-line">Текст и таблицы собираются из систем книги: правьте данные слева.</span></div>
+    </section>
+
+    <input type="file" id="tchTemplateInput" accept=".docx" hidden>
+</main>
+
+<main id="schMain" hidden>
+    <aside class="panel left" id="schForm"></aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <span class="vb-label">Принципиальная схема</span>
+            <span class="vb-empty" id="schInfo"></span>
+            <div class="spacer"></div>
+            <button data-action="sch-zoom-out">−</button>
+            <button data-action="sch-zoom-in">+</button>
+            <button data-action="sch-print">Печать / PDF</button>
+            <button data-action="sch-dxf" class="primary">Выгрузить DXF…</button>
+        </div>
+        <div class="sch-preview" id="schPreview"></div>
+        <div class="statusbar"><span id="schHint" class="hint-line">Лист собирается из расчёта: модуль на каждую насосную, стояки с выносками.</span></div>
+    </section>
+</main>
+
+<main id="taskMain" hidden>
+    <aside class="panel left" id="taskForm"></aside>
+
+    <section class="centre">
+        <div class="viewbar">
+            <span class="vb-label">Задание для ЭЛ и СС</span>
+            <span class="vb-empty" id="taskInfo"></span>
+            <div class="spacer"></div>
+            <button data-action="task-print">Печать / PDF</button>
+            <button data-action="task-xlsx" class="primary">Выгрузить .xlsx</button>
+        </div>
+        <div class="task-preview" id="taskPreview"></div>
+        <div class="statusbar"><span class="hint-line">Позиции собираются из книги: насосные и жокеи — из каталожных листов, узлы управления и краны — из систем. Правьте прямо в таблице.</span></div>
+    </section>
+
+    <input type="file" id="taskTemplateInput" accept=".xlsx" hidden>
+</main>
+<div id="modalRoot"></div>
+<div id="printArea"></div>
+
+<script src="js/format.js"></script>
+<script src="js/catalog.js"></script>
+<script src="js/sprinklers.js"></script>
+<script src="js/corridor.js"></script>
+<script src="js/model.js"></script>
+<script src="js/binding.js"></script>
+<script src="js/solver.js"></script>
+<script src="js/diaphragm.js"></script>
+<script src="js/vpv.js"></script>
+<script src="js/floors.js"></script>
+<script src="js/stations.js"></script>
+<script src="js/tch.js"></script>
+<script src="js/appendix.js"></script>
+<script src="js/tch-text.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/excel.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/history.js"></script>
+<script src="js/report.js"></script>
+<script src="js/view.js"></script>
+<script src="js/tools.js"></script>
+<script src="js/panels.js"></script>
+<script src="js/systems.js"></script>
+<script src="js/vpv-ui.js"></script>
+<script src="js/floors-ui.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/pdf-write.js"></script>
+<script src="js/pumps.js"></script>
+<script src="js/docx.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/canon.js"></script>
+<script src="js/dxf-write.js"></script>
+<script src="js/tch-ui.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/scheme-ui.js"></script>
+<script src="js/request.js"></script>
+<script src="js/request-ui.js"></script>
+<script src="js/task.js"></script>
+<script src="js/task-blank.js"></script>
+<script src="js/task-form.js"></script>
+<script src="js/task-ui.js"></script>
+<script src="js/library.js"></script>
+<script src="js/library-ui.js"></script>
+<script src="js/pump-window.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

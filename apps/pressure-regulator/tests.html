@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверки — регулятор давления</title>
+<style>
+  body { font: 14px/1.4 system-ui, "Segoe UI", Arial, sans-serif; margin: 20px; color: #1d2733; }
+  h1 { font-size: 18px; }
+  table { border-collapse: collapse; }
+  td, th { padding: 4px 10px; border-bottom: 1px solid #e3e8ee; text-align: left; font-variant-numeric: tabular-nums; }
+  .ok { color: #1f7a4d; }
+  .fail { color: #c62f2f; font-weight: 700; }
+  #total { font-size: 16px; font-weight: 700; margin: 10px 0; }
+</style>
+</head>
+<body>
+<h1>Проверки расчёта на числах из пособия Wilo</h1>
+<div id="total"></div>
+<table id="out"><thead><tr><th></th><th>Проверка</th><th>Получено</th><th>Ожидалось</th></tr></thead><tbody></tbody></table>
+<script src="js/format.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/tests.js"></script>
+</body>
+</html>

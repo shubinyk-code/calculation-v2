@@ -1,0 +1,771 @@
+/*
+    Бело-синее оформление, как у остальных веб-программ в этой папке.
+    Тёмной темы нет намеренно: план и таблица печатаются и уходят в том.
+*/
+
+:root {
+    --bg: #F5F9FD;
+    --panel: #FFFFFF;
+    --border: #DCE7F2;
+    --border-strong: #C3D6E8;
+    --text: #1B2A38;
+    --dim: #5B7186;
+    --blue: #1D6FB8;
+    --blue-soft: #EAF3FB;
+    --green: #17916B;
+    --green-soft: #E4F5EE;
+    --red: #D2413A;
+    --red-soft: #FBE9E8;
+    --teal: #1F9BB5;
+    --violet: #7A5AA8;
+    --orange: #E8892B;
+    --orange-soft: #FDF1E4;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    height: 100%;
+    margin: 0;
+    font: 13px/1.45 "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    overflow: hidden;
+}
+
+body { display: flex; flex-direction: column; }
+
+.spacer { flex: 1 1 auto; }
+[hidden] { display: none !important; }
+
+/* --- системы и ВПВ ------------------------------------------------------------ */
+
+.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 6vh 16px 16px;
+    background: rgba(27, 42, 56, 0.35);
+    overflow: auto;
+}
+.sheet {
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(27, 42, 56, 0.25);
+    padding: 14px 18px 16px;
+    max-width: 100%;
+}
+.sheet h2 { font-size: 16px; margin: 0 0 10px; color: var(--blue); }
+.sheet h4 { font-size: 13px; margin: 12px 0 6px; color: var(--blue); }
+.sheet .field { margin-bottom: 8px; }
+.sheet-buttons { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.sys-table { width: 100%; }
+.sys-table tr.selected td { background: var(--blue-soft); }
+
+.sysfield select { max-width: 280px; }
+.sys-sheet { width: min(980px, 96vw); }
+.sys-table input.cell { width: 100%; text-align: left; }
+.sys-table input.cell.title { min-width: 260px; }
+.sys-table .sys-actions { display: flex; gap: 4px; }
+.sys-table td { white-space: normal; }
+
+.panel.left.vpv-form { width: 390px; }
+.jet-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; font-size: 12px; }
+.jet-row .chips { display: flex; gap: 3px; }
+.jet-row .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 7px 2px 3px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+}
+.jet-row .chip.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+.jet-row .chip input { margin: 0; }
+.vpv-canvas { flex: 1 1 auto; overflow: auto; background: #fff; min-height: 0; }
+.vpv-canvas svg { display: block; }
+table.grid.sections input.cell { width: 52px; }
+table.grid.sections input.cell.short-name { width: 44px; text-align: left; }
+details.floors { margin: 6px 0; }
+details.floors summary { cursor: pointer; font-size: 12px; color: var(--blue); }
+.floor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 0 8px; margin-top: 6px; }
+.floor-grid input.manual { font-weight: 700; color: #0F6B4F; background: var(--green-soft); }
+.dim { color: var(--dim); }
+.bad { color: var(--red); font-weight: 600; }
+
+/* --- шапка ------------------------------------------------------------------ */
+
+.topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+
+.brand { font-weight: 700; font-size: 15px; color: var(--red); white-space: nowrap; }
+.brand span { display: block; font-weight: 400; font-size: 10.5px; color: var(--dim); }
+
+.name {
+    width: 210px;
+    padding: 5px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    font: inherit;
+}
+
+.summary { display: flex; gap: 14px; font-size: 12.5px; white-space: nowrap; }
+.summary b { font-size: 14px; color: var(--blue); }
+.summary .warn { color: var(--orange); font-weight: 600; cursor: help; }
+
+.toplink { color: var(--dim); font-size: 12px; }
+
+button {
+    font: 12.5px/1.3 "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    background: #fff;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+button:hover { border-color: var(--blue); color: var(--blue); }
+button.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+button.primary:hover { background: #148060; color: #fff; }
+button.danger:hover { border-color: var(--red); color: var(--red); }
+button:disabled { color: #B6C6D4; border-color: var(--border); cursor: default; }
+
+.history { display: flex; gap: 2px; }
+
+kbd {
+    font: 10.5px Consolas, monospace;
+    background: var(--blue-soft);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    color: var(--dim);
+}
+
+/* --- поля -------------------------------------------------------------------- */
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 7px;
+    min-width: 0;
+}
+
+.field.inline { flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+
+.field select, .field input, .array input {
+    font: 13px/1.3 "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    padding: 4px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: #fff;
+    width: 100%;
+    min-width: 0;
+}
+
+.field.inline select { width: auto; }
+
+.field input:focus, .field select:focus { border-color: var(--green); outline: none; }
+
+.check { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0; cursor: pointer; }
+.check.inline { margin: 0; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+
+.section {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px 6px;
+    margin: 0 0 10px;
+}
+
+.section legend {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--blue);
+    padding: 0 5px;
+}
+
+.checks { display: grid; grid-template-columns: 1fr 1fr; }
+
+/* --- основная область ----------------------------------------------------------- */
+
+main { display: flex; flex: 1 1 auto; min-height: 0; }
+
+.panel { background: var(--panel); overflow-y: auto; flex: 0 0 auto; }
+
+.panel.left { width: 250px; padding: 10px 12px; border-right: 1px solid var(--border); }
+
+.panel.right {
+    width: min(860px, 52vw);
+    max-width: calc(100vw - 460px);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+
+.panel h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--dim);
+    margin: 14px 0 7px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+
+.panel h3:first-child { margin-top: 0; }
+
+.hint { font-size: 11.5px; color: var(--dim); line-height: 1.5; margin: 8px 0; }
+.note-warn { font-size: 12px; color: #8A4B0C; background: var(--orange-soft); border-radius: 4px; padding: 4px 8px; margin: 4px 0 8px; }
+.field optgroup { font-style: normal; color: var(--blue); }
+
+.tools { display: flex; flex-direction: column; gap: 3px; }
+
+.tools button {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    text-align: left;
+    padding: 5px 9px;
+    border-left-width: 4px;
+}
+
+.tools button.active, .viewbar button.active {
+    background: var(--blue-soft);
+    border-color: var(--blue);
+    color: var(--blue);
+    font-weight: 600;
+}
+
+.tools .t-src { border-left-color: var(--blue); }
+.tools .t-main { border-left-color: var(--blue); }
+.tools .t-ray { border-left-color: var(--teal); }
+.tools .t-spr { border-left-color: var(--green); }
+.tools .t-cu { border-left-color: #2DB84D; }
+.tools .t-zone { border-left-color: var(--red); }
+.tools .t-corr { border-left-color: var(--violet, #7A5AA8); }
+.tools .t-pk { border-left-color: var(--violet); }
+
+/* План внутреннего пожаротушения: оросителей, УУ и расчётной зоны нет. */
+.tools.vpv-plan .t-ray,
+.tools.vpv-plan .t-spr,
+.tools.vpv-plan .t-cu,
+.tools.vpv-plan .t-zone { display: none; }
+.tools.vpv-plan .t-corr { display: none; }
+
+.dim-editor {
+    position: absolute;
+    z-index: 5;
+    width: 84px;
+    font: bold 13px "Segoe UI", Arial, sans-serif;
+    text-align: center;
+    padding: 3px 4px;
+    border: 2px solid var(--orange);
+    border-radius: 4px;
+    background: #fff;
+    box-shadow: 0 4px 14px rgba(27, 42, 56, 0.25);
+    outline: none;
+}
+
+.bind-title { margin: 2px 0 6px; color: var(--blue); font-size: 13px; }
+table.grid.bind-table { margin-bottom: 8px; }
+table.grid.bind-table td { white-space: normal; }
+input.cell.bind { width: 76px; background: var(--orange-soft); font-weight: 600; }
+
+.tabbody .inspector .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 0;
+    border-bottom: 1px dotted var(--border);
+    font-size: 12px;
+}
+
+.array .inspector { margin: 4px 0 6px; }
+table.grid.pk-table { margin-bottom: 10px; }
+table.grid.pk-table tr[data-node] { cursor: pointer; }
+.badge.red { background: var(--red-soft); color: var(--red); }
+.tools .t-erase { border-left-color: #9FB3C4; }
+
+/* --- свойства выбранного --------------------------------------------------------- */
+
+.inspector h4 { font-size: 13px; margin: 4px 0 6px; color: var(--blue); }
+
+.inspector .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 0;
+    border-bottom: 1px dotted var(--border);
+    font-size: 12px;
+}
+
+.inspector .row span:first-child { color: var(--dim); }
+.inspector .row span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.inspector .note { font-size: 11.5px; color: var(--orange); margin: 6px 0; }
+.inspector .field { margin-top: 6px; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.inspector .actions button { flex: 1 1 100%; text-align: left; display: flex; justify-content: space-between; }
+
+.array {
+    background: var(--blue-soft);
+    border-radius: 6px;
+    padding: 6px 9px 8px;
+    margin-top: 6px;
+}
+
+.array-title { font-size: 11.5px; font-weight: 600; color: var(--blue); margin-bottom: 4px; }
+.array button { width: 100%; margin-top: 4px; }
+
+/* --- холст --------------------------------------------------------------------- */
+
+.centre { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+
+.viewbar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+
+.vb-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); }
+.vb-empty { font-size: 12px; color: var(--dim); display: none; }
+.viewbar.no-underlay .ul-only { display: none; }
+.viewbar.no-underlay .vb-empty { display: inline; }
+.viewbar.no-dxf .dxf-only { display: none; }
+#ulOpacity { width: 90px; }
+
+.canvas-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
+
+.canvas-wrap canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    outline: none;
+    display: block;
+    touch-action: none;
+}
+
+.statusbar {
+    flex: 0 0 auto;
+    padding: 5px 12px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    min-height: 28px;
+}
+
+.hint-line { font-size: 12px; color: var(--dim); }
+.hint-line.warn { color: var(--orange); font-weight: 600; }
+.hint-line.done { color: var(--green); }
+
+.splitter {
+    flex: 0 0 5px;
+    cursor: col-resize;
+    background: var(--border);
+}
+
+.splitter:hover { background: var(--blue); }
+
+/* --- вкладки ------------------------------------------------------------------- */
+
+.tabs {
+    display: flex;
+    gap: 2px;
+    padding: 4px 10px 0;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+}
+
+.tabs button {
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 6px 10px;
+    color: var(--dim);
+}
+
+.tabs button.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+
+.tabbody { flex: 1 1 auto; overflow: auto; padding: 10px 12px 16px; min-height: 0; }
+
+.calc-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; margin-bottom: 10px; }
+
+.card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 9px;
+    background: #fff;
+}
+
+.card.ok { border-color: #9BD6BF; background: var(--green-soft); }
+.card.bad { border-color: #EFB1AD; background: var(--red-soft); }
+.card-title { font-size: 11px; color: var(--dim); }
+.card-value { font-size: 16px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.card-note { font-size: 11px; color: var(--dim); }
+.cards.small .card-value { font-size: 15px; }
+
+.warnings {
+    margin: 0 0 10px;
+    padding: 6px 10px 6px 26px;
+    background: var(--orange-soft);
+    border: 1px solid #F3CFA5;
+    border-radius: 6px;
+    color: #8A4B0C;
+    font-size: 12px;
+}
+
+.empty { padding: 24px; color: var(--dim); text-align: center; line-height: 1.6; }
+
+/* --- таблица расчёта ------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; }
+
+table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
+
+table.grid th {
+    position: sticky;
+    top: -10px;
+    z-index: 1;
+    background: var(--blue-soft);
+    font-weight: 600;
+    font-size: 11.5px;
+    text-align: center;
+    padding: 4px 5px;
+    border: 1px solid var(--border-strong);
+    line-height: 1.2;
+}
+
+table.grid td {
+    padding: 1px 4px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+table.grid td.num { text-align: right; }
+table.grid td.strong { font-weight: 600; }
+table.grid td.name { font-weight: 600; }
+table.grid tbody tr[data-seg] { cursor: pointer; }
+table.grid tbody tr[data-seg]:hover { background: #F2F8FD; }
+table.grid tbody tr.selected { background: var(--orange-soft); }
+
+table.grid tr.group-row td {
+    background: #F3F7FB;
+    color: var(--blue);
+    font-weight: 600;
+    padding: 5px 6px 3px;
+}
+
+table.grid tr.group-row.main td { color: var(--red); }
+table.grid tr.group-row[data-group-seg] { cursor: pointer; }
+table.grid tr.summary-row td { background: #FAFCFE; color: var(--dim); }
+table.grid tr.summary-row td.strong { color: var(--text); }
+table.grid tr.summary-row td.formula { font-style: italic; }
+table.grid tr.total-row td { background: #DCE7F2; font-weight: 700; }
+
+input.cell {
+    width: 58px;
+    font: 12px "Segoe UI", Arial, sans-serif;
+    text-align: right;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 2px 3px;
+    background: #F4FAF6;
+}
+
+input.cell.short { width: 44px; }
+input.cell::placeholder { color: #50667A; }
+input.cell:hover { border-color: var(--border-strong); }
+input.cell:focus { border-color: var(--green); outline: none; background: #fff; }
+input.cell.manual { font-weight: 700; color: #0F6B4F; background: var(--green-soft); }
+input.cell.formula::placeholder { color: var(--orange); }
+
+select.cell-select {
+    font: 12px "Segoe UI", Arial, sans-serif;
+    border: 1px solid transparent;
+    background: #F4FAF6;
+    border-radius: 3px;
+    padding: 1px 0;
+    max-width: 112px;
+}
+
+select.cell-select[data-key$=":material"] { max-width: 92px; }
+
+select.cell-select:hover { border-color: var(--border-strong); }
+
+.badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--blue-soft);
+    color: var(--blue);
+    font-weight: 600;
+}
+
+.badge.violet { background: #EFE9F7; color: var(--violet); }
+
+.pipes-title { margin: 14px 0 4px; font-size: 13px; }
+table.grid.pipes { width: auto; min-width: 360px; }
+
+.groups-preview div { padding: 2px 0; font-size: 12px; }
+
+/* --- вывод ------------------------------------------------------------------------ */
+
+.report {
+    background: #fff;
+    border: 1px solid var(--border);
+    padding: 14px 18px;
+    font-family: "Times New Roman", Georgia, serif;
+    font-size: 13.5px;
+    color: #000;
+}
+
+.report p { margin: 3px 0; }
+.report .r-appendix { text-align: right; font-weight: 700; }
+.report .r-title { text-align: center; font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+.report .r-sub { font-weight: 700; margin-top: 8px; }
+.report .r-formula { padding-left: 24px; }
+.report .r-result { padding-left: 24px; font-weight: 700; }
+.report .r-code { text-align: right; margin-top: 8px; }
+
+.report-table { border-collapse: collapse; width: 100%; margin-top: 6px; font-size: 11.5px; }
+
+.report-table th, .report-table td {
+    border: 1px solid #000;
+    padding: 2px 4px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.report-table th { font-weight: 400; font-size: 10.5px; }
+.report-table .r-group td { text-align: left; font-weight: 700; }
+.report-table .r-summary td { font-style: italic; }
+.report-table .r-total td { font-weight: 700; }
+
+#printArea { display: none; }
+
+@media print {
+    html, body { overflow: visible; height: auto; display: block; background: #fff; }
+    body > header, body > main { display: none !important; }
+    #printArea { display: block; }
+
+    /*
+        Поля страницы нулевые, а отступ 10 мм лист делает сам. Так сделано ради
+        колонтитулов: путь к файлу, имя пользователя, дату и номер страницы
+        браузер печатает в полях страницы, и когда их нет — печатать негде.
+        Рамка — таблица: шапку и подвал браузер повторяет на каждой странице,
+        поэтому верхний и нижний отступы одинаковы на всех листах.
+    */
+    @page { size: A4 landscape; margin: 0; }
+    #printArea .print-frame { width: 100%; border-collapse: collapse; }
+    #printArea .print-frame > thead > tr > td,
+    #printArea .print-frame > tfoot > tr > td { height: 10mm; border: none; padding: 0; }
+    #printArea .print-frame > tbody > tr > td { padding: 0 10mm; border: none; vertical-align: top; }
+    #printArea .report { border: none; padding: 0; }
+
+    /* Пакет приложений: каждое со своего листа, последнее без лишней страницы. */
+    #printArea .appendix-page { break-after: page; page-break-after: always; }
+    #printArea .appendix-page:last-child { break-after: auto; page-break-after: auto; }
+}
+
+@media (max-width: 1250px) {
+    .panel.left { width: 210px; }
+    .pair { grid-template-columns: 1fr; }
+}
+
+/* --- текстовая часть -------------------------------------------------------- */
+
+.panel.left.tch-form { width: 420px; }
+.tch-form textarea {
+    font: 12.5px/1.45 "Segoe UI", Arial, sans-serif;
+    padding: 4px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    resize: vertical;
+}
+.tch-preview { flex: 1 1 auto; overflow: auto; background: #fff; padding: 14px 20px; min-height: 0; }
+.tch-preview .report { max-width: 860px; margin: 0 auto; }
+.tch-preview h2 { font-size: 14px; color: var(--blue); margin: 14px 0 6px; }
+.tch-preview h3 { font-size: 13px; margin: 12px 0 4px; }
+.tch-preview ul { margin: 4px 0 8px 18px; padding: 0; }
+.tch-preview p { margin: 4px 0; text-align: justify; }
+.tch-preview .r-caption { font-weight: 600; margin-top: 10px; }
+
+/* --- окно насосного оборудования ------------------------------------------- */
+
+.pump-summary { margin: 4px 0 6px 16px; padding: 0; font-size: 12px; line-height: 1.5; }
+.pump-summary li { margin-bottom: 3px; }
+
+.modal.pump-modal { padding: 2vh 12px 12px; align-items: stretch; }
+.pump-sheet {
+    width: min(1500px, 98vw);
+    max-height: 96vh;
+    display: flex;
+    flex-direction: column;
+    padding: 10px 14px 12px;
+}
+.pump-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pump-bar h2 { margin: 0; }
+.pump-bar .zoom-group { display: inline-flex; gap: 2px; margin: 0 6px; }
+.pump-bar .zoom-group button { min-width: 34px; }
+.pump-sheet .hint { margin: 6px 0; }
+
+.pump-changes {
+    font-size: 12px;
+    background: var(--blue-soft);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 10px;
+    margin: 0 0 8px;
+}
+.pump-changes ul { margin: 2px 0 0 16px; padding: 0; }
+.pump-changes li span { display: inline-block; min-width: 88px; font-weight: 600; }
+.pump-changes li.replaced span { color: var(--orange); }
+.pump-changes li.added span, .pump-changes li.updated span { color: var(--green); }
+.pump-changes li.failed span { color: var(--red); }
+
+.pump-scroll { flex: 1 1 auto; overflow: auto; min-height: 200px; border: 1px solid var(--border); border-radius: 5px; }
+.pump-table { width: 100%; border-collapse: collapse; }
+.pump-table th { position: sticky; top: 0; z-index: 1; }
+.pump-table td { vertical-align: top; white-space: normal; }
+.pump-table input.cell { width: 100%; text-align: left; font-size: 13px; }
+.pump-table input.cell.name { min-width: 260px; }
+.pump-table input.cell.short { width: 70px; text-align: right; }
+.pump-table input.cell.count { min-width: 110px; }
+.pump-table select { font-size: 13px; }
+.pump-table td.calc { background: var(--blue-soft); font-weight: 600; }
+.pump-table tr.extra-row td { background: #FBFCFE; }
+.pump-table tr.main-row td { border-top: 2px solid var(--border-strong); }
+.pump-table .sheet-cell { min-width: 220px; max-width: 320px; font-size: 12px; }
+.pump-table .sheet-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pump-table .row-actions { white-space: nowrap; }
+.pump-table .row-actions button { margin: 0 2px 2px 0; }
+
+/* --- насосные в окне «Системы» ---------------------------------------------- */
+
+.station-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; }
+.st-systems { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
+.st-parts { margin: 4px 0 2px 18px; padding: 0; font-size: 12px; }
+.st-total { margin: 4px 0; font-size: 13px; }
+
+/* --- замечания расчёта ------------------------------------------------------- */
+
+.summary .warn { cursor: pointer; text-decoration: underline dotted; }
+.summary .warn:hover { color: var(--red); }
+.modal.mail-modal { z-index: 60; }
+.mail-sheet { width: min(720px, 94vw); }
+.mail-sheet textarea { width: 100%; font: 12.5px/1.5 "Segoe UI", Arial, sans-serif; padding: 6px 8px;
+    border: 1px solid var(--border-strong); border-radius: 4px; resize: vertical; }
+/* --- библиотека объектов ---------------------------------------------------- */
+
+.lib-rev { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; }
+.lib-rev:empty { display: none; }
+.lib-rev.none { color: var(--dim); }
+.lib-rev.clean { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.lib-rev.dirty { color: var(--orange); border-color: var(--orange); background: var(--orange-soft); }
+
+.lib-modal { z-index: 70; }
+.lib-sheet { width: min(1060px, 96vw); }
+.lib-cols { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 14px; align-items: start; }
+.lib-list { border: 1px solid var(--border); border-radius: 6px; max-height: 58vh; overflow: auto; margin-top: 6px; }
+.lib-row { padding: 6px 9px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.lib-row:last-child { border-bottom: 0; }
+.lib-row:hover { background: var(--bg); }
+.lib-row.sel { background: var(--blue-soft); }
+.lib-name { font-weight: 600; word-break: break-word; }
+.lib-sub { font-size: 11.5px; color: var(--dim); }
+.lib-dot, .lib-base { color: var(--blue); }
+.lib-main h3 { font-size: 13px; margin: 14px 0 6px; color: var(--blue); }
+.lib-open { color: var(--blue); font-size: 12.5px; margin-right: 6px; }
+.lib-save { display: flex; gap: 8px; align-items: flex-end; padding: 9px 10px; margin: 8px 0;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.lib-save .field { flex: 1 1 auto; margin: 0; }
+.lib-revs td.name { text-align: left; }
+.lib-rbtn { white-space: nowrap; text-align: right; }
+.lib-rbtn button { margin-left: 4px; padding: 1px 7px; }
+@media (max-width: 820px) { .lib-cols { grid-template-columns: 1fr; } }
+
+.mail-contacts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 2px 0 8px; }
+.mail-contacts .vb-label { margin-right: 2px; }
+.mail-contacts .dim { font-size: 11px; }
+
+/* --- принципиальная схема --------------------------------------------------- */
+
+.sch-preview { flex: 1 1 auto; overflow: auto; background: #fff; padding: 16px; min-height: 0; }
+.sch-sheet { display: block; margin: 0 auto; background: #fff; }
+.sch-print .sch-sheet { width: 100% !important; height: auto !important; }
+
+/* --- задание для ЭЛ и СС ---------------------------------------------------- */
+
+.task-preview { flex: 1 1 auto; overflow: auto; background: #fff; padding: 12px 14px; min-height: 0; }
+.task-preview table.task { width: 100%; }
+.task-preview table.task th { font-size: 10.5px; line-height: 1.25; }
+.task-preview table.task td { vertical-align: top; }
+.task-preview table.task td.note { min-width: 320px; }
+.task-preview table.task textarea.cell {
+    width: 100%; min-height: 54px; resize: vertical; font: inherit; line-height: 1.35;
+    border: 1px solid var(--border); border-radius: 3px; padding: 3px 5px; background: #fff;
+}
+.task-preview table.task input.cell { width: 100%; }
+.task-preview table.task input.cell.short { width: 62px; }
+.task-preview table.task td.actions-cell { text-align: center; }
+.task-preview table.task td.actions-cell button { padding: 1px 7px; line-height: 1.2; }
+
+.sys-color { white-space: nowrap; }
+.sys-color input[type="color"] { width: 34px; height: 22px; padding: 0; border: 1px solid var(--border-strong); border-radius: 3px; background: none; cursor: pointer; }
+.sys-color .dim { display: inline-block; margin-left: 6px; font-size: 11px; }
+
+.appendix-list { margin: 6px 0 8px; font-size: 12px; line-height: 1.65; }
+.appendix-list div { padding: 1px 0; }
+
+.dxf-sheet { width: min(520px, 94vw); }
+.warn-sheet { width: min(760px, 94vw); }
+.warn-sheet .warnings { margin: 6px 0 0 18px; padding: 0; font-size: 13px; line-height: 1.55; }
+.warn-sheet .warnings li { margin-bottom: 6px; }
+
+/* Замечания расстановки в коридоре: короткий список под карточкой. */
+.tabbody ul.notes {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    color: var(--muted, #5A6B7B);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.tabbody ul.notes li { margin-bottom: 4px; }

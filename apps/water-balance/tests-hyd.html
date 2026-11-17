@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Самопроверка гидравлики — ХВС/ГВС</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+    main { max-width: 1100px; }
+    .t-ok { color: var(--good); }
+    .t-bad { color: var(--bad); font-weight: 600; }
+    #summary { font-size: 15px; font-weight: 600; padding: 10px 14px; border-radius: 8px; }
+    #summary.ok { background: var(--good-soft); color: var(--good); }
+    #summary.bad { background: var(--bad-soft); color: var(--bad); }
+    td.name { width: 55%; }
+</style>
+</head>
+<body>
+
+<header class="top">
+    <div class="brand">ВК<span>Самопроверка гидравлики</span></div>
+    <div class="spacer"></div>
+    <a href="index.html"><button>К программе</button></a>
+    <a href="tests.html"><button>Проверки расхода</button></a>
+</header>
+
+<main>
+<div class="card">
+    <h2>Что проверяется</h2>
+    <p class="hint">
+        Контрольные точки взяты с выпущенной схемы образца (ПБ-1303-2/26-ИОС2, лист 1): подписи участков
+        «Ø… q=… V=… i=…». Они проверяют не «правила», а расчётное ядро: диаметр с запасом, скорость,
+        удельные потери по Шевелёву (сталь) и по гладкой трубе (полимер). Дальше — свёртка расхода
+        обоими способами против Demand.combine и Consumers.run.
+    </p>
+    <div id="summary"></div>
+</div>
+<div class="card"><table id="results"><tbody></tbody></table></div>
+</main>
+
+<script src="js/sp30-data.js"></script>
+<script src="js/format.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/demand.js"></script>
+<script src="js/consumers.js"></script>
+<script src="js/hyd-data.js"></script>
+<script src="js/hyd-flow.js"></script>
+<script src="js/hyd-meter.js"></script>
+<script src="js/hyd-model.js"></script>
+<script src="js/hyd-graph.js"></script>
+<script src="js/hyd-net.js"></script>
+<script src="js/hyd-route.js"></script>
+<script src="js/hyd-calc.js"></script>
+<script src="js/hyd-report.js"></script>
+<script src="js/hyd-dxf.js"></script>
+<script src="js/pdf-vector.js"></script>
+<script src="js/hyd-pdf.js"></script>
+<script src="js/pdf-read.js"></script>
+<script src="js/pdf-write.js"></script>
+<script src="js/hyd-pumps.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/hyd-request.js"></script>
+<script src="js/hyd-elss.js"></script>
+<script src="js/hyd-itp.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var body = document.querySelector('#results tbody');
+    var passed = 0;
+    var failed = 0;
+
+    function section(title) {
+        body.insertAdjacentHTML('beforeend',
+            '<tr class="total"><td colspan="3" class="left">' + Format.html(title) + '</td></tr>');
+    }
+
+    function check(name, actual, expected, tolerance) {
+        var ok, shown;
+
+        if (typeof expected === 'number') {
+            var eps = tolerance === undefined ? 1e-9 : tolerance;
+            ok = typeof actual === 'number' && isFinite(actual) && Math.abs(actual - expected) <= eps;
+            shown = Format.num(actual) + ' / ожидалось ' + Format.num(expected);
+        } else {
+            ok = actual === expected;
+            shown = String(actual) + ' / ожидалось ' + String(expected);
+        }
+
+        if (ok) passed++; else failed++;
+
+        body.insertAdjacentHTML('beforeend',
+            '<tr><td class="left name">' + Format.html(name) + '</td>'
+            + '<td class="left ' + (ok ? 't-ok' : 't-bad') + '">' + (ok ? 'ок' : 'НЕ СОШЛОСЬ') + '</td>'
+            + '<td class="left">' + Format.html(shown) + '</td></tr>');
+    }
+
+    function pipeAt(mat, od, wall) { return HydData.find(mat, od, wall); }
+
+    function fr(mat, od, wall, q, nu) {
+        var s = pipeAt(mat, od, wall);
+        return HydFlow.friction(q, HydFlow.designMm(s), mat, nu);
+    }
+
+    /* ---------------------------------------------------------------- */
+    section('Калибровка по подписям схемы образца — сталь и нержавейка (Шевелёв, d = dвн − 1)');
+
+    var f;
+
+    f = fr('ss9941', 48, 3, 0.972, 1.0);
+    check('Ø48×3, q=0,972: скорость', f.v, 0.736, 0.004);
+    check('Ø48×3, q=0,972: i, мм/м', f.iMm, 39.71, 0.8);
+
+    f = fr('ss9941', 48, 3, 1.152, 1.0);
+    check('Ø48×3, q=1,152: скорость', f.v, 0.876, 0.005);
+    check('Ø48×3, q=1,152: i, мм/м', f.iMm, 54.671, 1.0);
+
+    f = fr('ss9941', 108, 3.5, 6.201, 1.0);
+    check('Ø108×3,5, q=6,201: скорость', f.v, 0.79, 0.005);
+    check('Ø108×3,5, q=6,201: i, мм/м', f.iMm, 14.17, 0.3);
+
+    section('Калибровка — ввод ПЭ100 SDR17 (без запаса)');
+
+    f = fr('pe100s17', 160, 9.5, 6.201, 1.0);
+    check('160×9,5, q=6,201: скорость', f.v, 0.397, 0.003);
+
+    section('Калибровка — полимерные стояки 63×10,5 (запас 0,8 мм, ν = 1,0·10⁻⁶ м²/с)');
+
+    f = fr('pert', 63, 10.5, 1.056, 1.0);
+    check('63×10,5, q=1,056: скорость', f.v, 0.79, 0.01);
+    check('63×10,5, q=1,056: i, мм/м', f.iMm, 17.97, 0.8);
+
+    f = fr('pert', 63, 10.5, 0.889, 1.0);
+    check('63×10,5, q=0,889: скорость', f.v, 0.66, 0.01);
+    check('63×10,5, q=0,889: i, мм/м', f.iMm, 13.23, 0.7);
+
+    section('Подбор диаметра');
+
+    var pick = HydFlow.pickSize('ss9941', 0.972, 1.0, 1.0);
+    check('q=0,972 при v≤1,0 — Ду40 (Ø48×3)', pick.size.dn, 40);
+    pick = HydFlow.pickSize('ss9941', 0.972, 0.8, 1.0);
+    check('q=0,972 при v≤0,8 — всё ещё Ду40 (v=0,736)', pick.size.dn, 40);
+    pick = HydFlow.pickSize('pexa', 0.3, 1.5, 1.0, 15);
+    check('квартира, q=0,3 — не меньше Ду15', pick.size.dn >= 15, true);
+
+    /* ---------------------------------------------------------------- */
+    section('Расход: свёртка накопителем против Consumers.run и Demand.combine');
+
+    var living = Tables.norm('Жилые дома с ваннами от 1500 мм, оборудованными душами');
+    var office = Tables.norm('Административные здания');
+
+    var c1 = { id: 'c1', name: 'С1', group: '', norm: living.name, hours: 0, usersDay: 291, usersHour: 620, fixtures: 0, fixturesHot: 0, q0Sewer: 1.6 };
+    var c2 = { id: 'c2', name: 'С2', group: '', norm: living.name, hours: 0, usersDay: 57, usersHour: 112, fixtures: 0, fixturesHot: 0, q0Sewer: 1.6 };
+
+    var r1 = Consumers.run(c1, false);
+    var a1 = HydFlow.aggregate([{ norm: living, U: 620, N: 0, Nh: 0 }], 'total');
+    check('С1 общий: q', a1.q, r1.total.q, 1e-9);
+    var a1h = HydFlow.aggregate([{ norm: living, U: 620, N: 0, Nh: 0 }], 'hot');
+    check('С1 горячий: q', a1h.q, r1.hot.q, 1e-9);
+    var a1c = HydFlow.aggregate([{ norm: living, U: 620, N: 0, Nh: 0 }], 'cold');
+    check('С1 холодный: q', a1c.q, r1.cold.q, 1e-9);
+    check('С1 общий q = 4,656 л/с (образец, таблица 2)', a1.q, 4.656, 0.002);
+
+    var both = [{ norm: living, U: 620, N: 0, Nh: 0 }, { norm: living, U: 112, N: 0, Nh: 0 }];
+    var setRes = Consumers.combine('Итого', [c1, c2], false);
+    var a2 = HydFlow.aggregate(both, 'total');
+    check('С1+С2 общий: q = Consumers.combine', a2.q, setRes.total.q, 1e-9);
+    check('С1+С2 общий q = 5,222 л/с (образец)', a2.q, 5.222, 0.002);
+    check('С1+С2 горячий: q = Consumers.combine', HydFlow.aggregate(both, 'hot').q, setRes.hot.q, 1e-9);
+
+    var o1 = { id: 'o1', name: 'Офис', group: '', norm: office.name, hours: 0, usersDay: 16, usersHour: 16, fixtures: 0, fixturesHot: 0, q0Sewer: 1.6 };
+    var mixed = Consumers.combine('Смесь', [c1, c2, o1], false);
+    var a3 = HydFlow.aggregate(both.concat([{ norm: office, U: 16, N: 0, Nh: 0 }]), 'total');
+    check('жильё + офис: q = Consumers.combine (смесь формул 1 и 4)', a3.q, mixed.total.q, 1e-9);
+    check('жильё + офис: P', a3.P, mixed.total.P, 1e-12);
+
+    section('Способ «по приборам»: одна P на систему');
+
+    var sys = HydFlow.aggregate(both, 'total');
+    var viaFixed = HydFlow.aggregate(both, 'total', { fixedP: sys.P });
+    check('при той же P и том же N расход тот же', viaFixed.q, sys.q, 1e-9);
+
+    // половина приборов при той же P: меньше N·P, меньше расход, но больше q на прибор
+    var half = HydFlow.aggregate([{ norm: living, U: 366, N: 366, Nh: 366 }], 'total', { fixedP: sys.P });
+    check('половина приборов — расход меньше', half.q < sys.q, true);
+    check('N·P половины = половина N·P', half.NP, sys.NP / 2, 1e-9);
+
+    check('способы «по людям» и «по приборам» совпадают на однородной нагрузке',
+        HydFlow.aggregate([{ norm: living, U: 620, N: 620, Nh: 620 }], 'total', { fixedP: a1.P }).q, a1.q, 1e-9);
+
+    section('Нулевые и неполные данные');
+
+    check('пустая нагрузка — нулевой расход', HydFlow.aggregate([], 'total').q, 0);
+    check('горячей воды нет (жильё без ГВС) — нулевой расход',
+        HydFlow.aggregate([{ norm: Tables.norm('Жилые дома с водопроводом и канализацией без ванн'), U: 100, N: 0, Nh: 0 }], 'hot').q, 0);
+
+    /* ---------------------------------------------------------------- */
+    section('Модель: холст, развёртка стояков, размножение, исключения');
+
+    function fresh() { return HydModel.normalize(JSON.parse(JSON.stringify(HydModel.blank()))); }
+    function kinds(h, k) { return h.canvas.nodes.filter(function (n) { return n.kind === k; }); }
+
+    var h0 = fresh();
+    check('проект читается и пишется без потерь',
+        JSON.stringify(HydModel.normalize(JSON.parse(JSON.stringify(h0)))), JSON.stringify(h0));
+    check('стартовая схема: один ввод', kinds(h0, 'input').length, 1);
+    check('стартовая схема: два стояка', kinds(h0, 'riser').length, 2);
+    check('стартовая схема: насос и ИТП', kinds(h0, 'pump').length + kinds(h0, 'itp').length, 2);
+    check('стартовая схема: на листе ГВС есть трубы', h0.canvas.pipes.filter(function (p) { return p.sheet === 'h'; }).length >= 2, true);
+
+    var e0 = HydModel.expand(h0);
+    check('2 стояка × 9 этажей × 4 выхода = 72 выхода', e0.outlets.length, 72);
+    check('людей: 12 на этаже × 9 × 2 стояка = 216', e0.people, 216);
+    check('идентификатор выхода', /\/F2\/C1\/O3$/.test(e0.outlets[6].id), true);
+    check('сквозная нумерация подписей', e0.outlets[71].label, 'кв. 72');
+    check('марки: В1.1 и Т3.2', e0.risers[0].markC + ' ' + e0.risers[1].markH, 'В1.1 Т3.2');
+
+    var h1 = fresh();
+    h1.floorTypes[0].collectors[0].outlets[1].count = 3;
+    check('размножение ×3 даёт 6 выходов на этаже', HydModel.expand(h1).outlets.length, 2 * 9 * 6);
+
+    var h2 = fresh();
+    HydModel.risers(h2)[0].exceptions.push({ floor: 1, typeId: '' });
+    check('исключение: первый этаж без выходов', HydModel.expand(h2).outlets.length, 68);
+
+    var h3 = fresh();
+    h3.floorTypes.push({ id: 'T2', name: 'Пустой', collectors: [] });
+    HydModel.risers(h3)[1].ranges.push({ from: 5, to: 9, typeId: 'T2' });
+    check('последний диапазон перекрывает предыдущий', HydModel.expand(h3).outlets.length, 36 + 16);
+
+    var h4 = fresh();
+    HydModel.risers(h4)[0].firstNumber = 101;
+    check('firstNumber начинает нумерацию заново', HydModel.expand(h4).outlets[0].label, 'кв. 101');
+
+    /* ---------------------------------------------------------------- */
+    section('Расчёт: расход на вводе и в насосе совпадает со сводом СП 30 по людям');
+
+    var rA = HydCalc.run(fresh(), false);
+    var ref216 = HydFlow.aggregate([{ norm: living, U: 216, N: 0, Nh: 0 }], 'total');
+    check('ввод: q = свод по 216 жителям', rA.input.q, ref216.q, 1e-9);
+    check('одна система — насос', rA.systems.length + ':' + rA.systems[0].kind, '1:pump');
+    check('Qтр насоса = расход ввода', rA.systems[0].pump.q, rA.input.q, 1e-9);
+    check('замечаний нет', rA.warnings.join('; '), '');
+
+    var seg = rA.net.byId;
+    var itpSeg = rA.net.segs.filter(function (s) { return s.meta.itp; })[0];
+    check('питающая труба ИТП несёт горячий расход', itpSeg.res.q,
+        HydFlow.aggregate([{ norm: living, U: 216, N: 0, Nh: 0 }], 'hot').q, 1e-9);
+    check('питающая труба — горячий канал', itpSeg.ch, 'hot');
+    var hotRoot = rA.net.segs.filter(function (s) { return s.kind === 'itpdev'; })[0];
+    check('ГВС растёт из питающей трубы ИТП', hotRoot.parent, itpSeg.id);
+    check('на листе ГВС расход = горячий по всем 216', hotRoot.res.q, itpSeg.res.q, 1e-9);
+
+    var monotone = true;
+    rA.net.segs.forEach(function (s) {
+        if (!s.parent) return;
+        var p = seg[s.parent];
+        if (p.ch === s.ch && s.res.q > p.res.q + 1e-9) monotone = false;
+    });
+    check('в пределах одного канала расход дочернего участка не больше родителя', monotone, true);
+
+    var r1chain = rA.net.segs.filter(function (s) { return s.chain === 'c|R:' + HydModel.risers(h0)[0].id; });
+    var sizes = {};
+    r1chain.forEach(function (s) { sizes[s.res.size.label] = true; });
+    check('стояк — один диаметр на всю высоту', Object.keys(sizes).length, 1);
+    check('9 звеньев стояка', r1chain.length, 9);
+    check('нижнее звено несёт все 108 человек стояка', r1chain[0].res.U, 108);
+    check('верхнее звено — один этаж (12 человек)', r1chain[8].res.U, 12);
+    check('нижнее звено идёт от низа блока до 1 этажа', r1chain[0].L, h0.survey.groundElev - HydModel.risers(h0)[0].baseElev, 1e-9);
+
+    section('Расчёт: напор насоса собирается из составляющих формулы образца');
+
+    var pump = rA.systems[0].pump;
+    var part = rA.systems[0].dict.part;
+    var hgar = kinds(h0, 'input')[0].Hgar;
+    check('Hp = Hgeom + ΣHl,tot + Hпр − Hгар', pump.hp, Math.max(0, part.geom + part.tot + part.pr - hgar), 1e-9);
+    check('Hмест = Kl · ΣHl', part.local, h0.survey.kl * part.sumL, 1e-9);
+    check('диктует прибор ГВС (ИТП на пути)', part.itp > 0, true);
+    check('водомерный узел ввода учтён', part.main > 0, true);
+    check('потери в насосной учтены', part.ns, h0.survey.hNs, 1e-9);
+    check('Hp положителен для 9 этажей при Hгар 24 м', pump.hp > 0, true);
+
+    section('Способ «по приборам» совпадает со способом «по людям», когда прибор = человек');
+
+    var hf = fresh();
+    hf.method = 'fixtures';
+    hf.floorTypes[0].collectors[0].outlets.forEach(function (o) {
+        o.fixtures = [{ id: 'sink', count: HydModel.outletPeople(hf.survey, o) }];
+    });
+    var rF = HydCalc.run(hf, false);
+    check('ввод: q «по приборам» = q «по людям»', rF.input.q, rA.input.q, 1e-9);
+    check('Hp совпадает', rF.systems[0].pump.hp, pump.hp, 1e-6);
+
+    var hf2 = fresh();
+    hf2.method = 'fixtures';
+    var rF2 = HydCalc.run(hf2, false);
+    check('по приборам: расход на вводе тот же (N·P системы не зависит от N)', rF2.input.q, rA.input.q, 1e-9);
+    var apt1 = HydModel.expand(h0).outlets[0].id;
+    check('по приборам: однокомнатная считается иначе, чем по людям',
+        rF2.net.byId['c|' + apt1].res.q !== rA.net.byId['c|' + apt1].res.q, true);
+
+    section('Высотное здание: регуляторы у нижних этажей, насос растёт с высотой');
+
+    var ht = fresh();
+    HydModel.risers(ht).forEach(function (r) { r.floorTo = 25; r.ranges = [{ from: 1, to: 25, typeId: 'T1' }]; });
+    var rT = HydCalc.run(ht, false);
+    check('25 этажей: Hp больше, чем у 9', rT.systems[0].pump.hp > pump.hp, true);
+    check('регуляторы у нижних приборов', rT.systems[0].pump.regs > 0, true);
+    var lowLeaf = rT.systems[0].leaves.reduce(function (a, b) { return !a || b.elev < a.elev ? b : a; }, null);
+    check('у нижнего прибора регулятор стоит, статика выше 45 м', lowLeaf.reg && lowLeaf.static > 45, true);
+
+    var hg = fresh();
+    kinds(hg, 'input')[0].Hgar = 140;
+    check('Hгар с запасом — повысительный насос не нужен', HydCalc.run(hg, false).systems[0].pump.needed, false);
+
+    section('Насосные установки: сколько нарисовано, столько систем');
+
+    function insertInline(h, kind, pipeId) {
+        var pipe = h.canvas.pipes.filter(function (p) { return p.id === pipeId; })[0];
+        var pts = HydGraph.ptsOf(h, pipe);
+        var hit = HydGraph.nearestOnPoly(pts, { x: (pts[0].x + pts[pts.length - 1].x) / 2, y: (pts[0].y + pts[pts.length - 1].y) / 2 });
+        var node = HydModel.newNode(h, kind, hit.pt.x, hit.pt.y, pipe.sheet);
+        h.canvas.nodes.push(node);
+        HydGraph.splitPipe(h, pipe, hit, node);
+        return node;
+    }
+
+    function riserPipe(h, i) {
+        var id = HydModel.risers(h)[i].id;
+        return h.canvas.pipes.filter(function (p) { return p.sheet === 'c' && p.b === id; })[0].id;
+    }
+
+    var hp2 = fresh();
+    HydGraph.removeNode(hp2, kinds(hp2, 'pump')[0].id);
+    insertInline(hp2, 'pump', riserPipe(hp2, 1));
+    var rP2 = HydCalc.run(hp2, false);
+    check('насос только на втором стояке: насосная система и городская', rP2.systems.map(function (s) { return s.kind; }).join(','), 'pump,city');
+
+    var hp3 = fresh();
+    HydGraph.removeNode(hp3, kinds(hp3, 'pump')[0].id);
+    insertInline(hp3, 'pump', riserPipe(hp3, 0));
+    insertInline(hp3, 'pump', riserPipe(hp3, 1));
+    var rP3 = HydCalc.run(hp3, false);
+    check('два насоса на стояках — две насосные системы и горячая сеть от города', rP3.systems.map(function (s) { return s.kind; }).join(','), 'pump,pump,city');
+    check('у каждого свой Qтр (половина нагрузки)', Math.abs(rP3.systems[0].pump.q - rP3.systems[1].pump.q) < 1e-9 && rP3.systems[0].pump.q < rP3.input.q, true);
+    check('и свои насосы в подвале считаются', rP3.systems[0].pump.hp > 0 && rP3.systems[1].pump.hp > 0, true);
+
+    section('Встроенное помещение: подключается трубой куда угодно');
+
+    var hb = fresh();
+    var tee0 = hb.canvas.nodes.filter(function (n) { return n.kind === 'tee'; })[0];
+    var bi = HydModel.newNode(hb, 'buildin', tee0.x + 60, tee0.y + 120);
+    hb.canvas.nodes.push(bi);
+    HydGraph.addPipe(hb, tee0.id, bi.id, 'c');
+    var rB = HydCalc.run(hb, false);
+    check('встроенное увеличивает расход на вводе', rB.input.q > rA.input.q, true);
+    check('встроенное — прибор той же системы', rB.systems[0].leaves.some(function (l) { return l.node === bi.id; }), true);
+
+    var hbOwn = fresh();
+    var tee1 = hbOwn.canvas.nodes.filter(function (n) { return n.kind === 'tee'; })[0];
+    var bi2 = HydModel.newNode(hbOwn, 'buildin', tee1.x + 60, tee1.y + 120);
+    hbOwn.canvas.nodes.push(bi2);
+    var pp = HydGraph.addPipe(hbOwn, tee1.id, bi2.id, 'c');
+    insertInline(hbOwn, 'pump', pp.id);
+    var rBo = HydCalc.run(hbOwn, false);
+    check('своя насосная у встроенного — отдельная система', rBo.systems.length, 2);
+
+    section('Контроль графа');
+
+    var hc = fresh();
+    var tees = kinds(hc, 'tee').filter(function (n) { return n.sheet === 'c'; });
+    HydGraph.addPipe(hc, tees[0].id, tees[tees.length - 1].id, 'c');
+    check('замкнутый контур даёт предупреждение', HydCalc.run(hc, false).warnings.some(function (w) { return w.indexOf('замкнут') >= 0; }), true);
+
+    var hn = fresh();
+    HydGraph.removePipe(hn, riserPipe(hn, 1));
+    check('стояк без трубы — предупреждение', HydCalc.run(hn, false).warnings.some(function (w) { return w.indexOf('не соединён') >= 0; }), true);
+
+    var hx = fresh();
+    HydGraph.removeNode(hx, kinds(hx, 'input')[0].id);
+    check('без ввода расчёт не падает', HydCalc.run(hx, false).systems.length, 0);
+
+    var hm = fresh();
+    var before = hm.canvas.pipes.length;
+    HydGraph.removeNode(hm, kinds(hm, 'pump')[0].id);
+    check('удаление проходного узла склеивает трубы', hm.canvas.pipes.length, before - 1);
+    check('после удаления насоса система — городская сеть', HydCalc.run(hm, false).systems[0].kind, 'city');
+
+    section('ГВС копией трассы ХВС');
+
+    var hh = fresh();
+    var hotBefore = hh.canvas.pipes.filter(function (p) { return p.sheet === 'h'; }).length;
+    var cp = HydGraph.copyToHot(hh);
+    check('копия повторяемая', cp.ok && hh.canvas.pipes.filter(function (p) { return p.sheet === 'h'; }).length === hotBefore, true);
+    var noItp = fresh();
+    HydGraph.removeNode(noItp, kinds(noItp, 'itp')[0].id);
+    check('без ИТП копировать нечего', HydGraph.copyToHot(noItp).ok, false);
+    check('без ИТП вся нагрузка — общий канал', HydCalc.run(noItp, false).net.byId['c|in'].ch, 'total');
+
+    section('Порты: точки подключения и автотрассировка');
+
+    var hpo = fresh();
+    var inp0 = kinds(hpo, 'input')[0];
+    var firstPipe = hpo.canvas.pipes.filter(function (p) { return p.a === inp0.id && p.sheet === 'c'; })[0];
+    var pts0 = HydGraph.ptsOf(hpo, firstPipe);
+    check('труба начинается в порту ввода (справа от центра)', pts0[0].x + ',' + pts0[0].y, (inp0.x + 16) + ',' + inp0.y);
+    check('у стояка три порта', HydGraph.portsOf(kinds(hpo, 'riser')[0], 'c').length, 3);
+    check('у тройника один порт — центр', HydGraph.portsOf(kinds(hpo, 'tee')[0], 'c')[0].id, 'c');
+
+    var near = HydGraph.nearestPort(hpo, 'c', { x: inp0.x + 20, y: inp0.y + 3 }, 12);
+    check('притяжение: ближайший порт в радиусе', near && near.node.id + ':' + near.port.id, inp0.id + ':r');
+    check('притяжение: вне радиуса порта нет', HydGraph.nearestPort(hpo, 'c', { x: 5000, y: 5000 }, 12), null);
+
+    var rt = HydGraph.route({ x: 0, y: 0 }, { dx: 1, dy: 0 }, { x: 100, y: 50 }, { dx: 0, dy: 1 });
+    check('трасса из горизонтального выхода в вертикальный порт — один излом', JSON.stringify(rt), JSON.stringify([{ x: 100, y: 0 }]));
+    check('две горизонтали — два излома по середине', HydGraph.route({ x: 0, y: 0 }, { dx: 1, dy: 0 }, { x: 100, y: 50 }, { dx: -1, dy: 0 }).length, 2);
+    check('на одной линии излома нет', HydGraph.route({ x: 0, y: 0 }, { dx: 1, dy: 0 }, { x: 100, y: 0 }, { dx: -1, dy: 0 }).length, 0);
+
+    var hsp = fresh();
+    var rp = hsp.canvas.pipes.filter(function (p) { return p.sheet === 'c' && p.pb === 'b'; })[0];
+    var tailPb = rp.pb;
+    var hit = HydGraph.nearestOnPoly(HydGraph.ptsOf(hsp, rp), { x: 0, y: 0 });
+    var tee2 = HydModel.newNode(hsp, 'tee', hit.pt.x, hit.pt.y, 'c');
+    hsp.canvas.nodes.push(tee2);
+    var parts = HydGraph.splitPipe(hsp, rp, hit, tee2);
+    check('после разреза хвост сохраняет порт стояка', parts[1].pb, tailPb);
+    check('после разреза у головы порт не закреплён (авто)', parts[0].pb, undefined);
+
+    var hmg = fresh();
+    var mt = kinds(hmg, 'meter')[0];
+    var mIn = hmg.canvas.pipes.filter(function (p) { return p.b === mt.id; })[0];
+    var mOut = hmg.canvas.pipes.filter(function (p) { return p.a === mt.id; })[0];
+    var wantFrom = mIn.pa;
+    var wantTo = mOut.pb;
+    HydGraph.removeNode(hmg, mt.id);
+    var merged = hmg.canvas.pipes.filter(function (p) { return p.pa === wantFrom && p.pb === wantTo; });
+    check('при склейке труб порты концов сохраняются', merged.length >= 1, true);
+
+    section('Тупики: стояк, встроенное и ИТП принимают одну трубу');
+
+    var hfl = fresh();
+    var itpN = kinds(hfl, 'itp')[0];
+    check('ИТП на листе ХВС занят единственной подачей', HydGraph.full(hfl, itpN, 'c'), true);
+    check('ИТП на листе ГВС не ограничен', HydGraph.full(hfl, itpN, 'h'), false);
+    check('стояк занят одной трубой', HydGraph.full(hfl, kinds(hfl, 'riser')[0], 'c'), true);
+    check('тройник не ограничен', HydGraph.full(hfl, kinds(hfl, 'tee')[0], 'c'), false);
+
+    // кольцо через ИТП: вторая труба от ИТП к магистрали
+    var teeX = HydModel.newNode(hfl, 'tee', 900, 760, 'c');
+    hfl.canvas.nodes.push(teeX);
+    var farTee = kinds(hfl, 'tee').filter(function (n) { return n.sheet === 'c'; })[1];
+    HydGraph.addPipe(hfl, itpN.id, teeX.id, 'c', [], 'b');
+    HydGraph.addPipe(hfl, teeX.id, farTee.id, 'c');
+    var rRing = HydCalc.run(hfl, false);
+    check('лишняя труба у ИТП даёт предупреждение', rRing.warnings.some(function (w) { return w.indexOf('ИТП') >= 0 && w.indexOf('должна быть одна') >= 0; }), true);
+    check('труба кольца помечена как кольцо', Object.keys(rRing.net.pipeIssue).some(function (k) { return rRing.net.pipeIssue[k] === 'ring'; }), true);
+
+    var hfree = fresh();
+    var lone = HydModel.newNode(hfree, 'tee', 900, 900, 'c');
+    hfree.canvas.nodes.push(lone);
+    var lone2 = HydModel.newNode(hfree, 'tee', 950, 900, 'c');
+    hfree.canvas.nodes.push(lone2);
+    var lp = HydGraph.addPipe(hfree, lone.id, lone2.id, 'c');
+    check('труба вне сети помечена как неподключённая', HydCalc.run(hfree, false).net.pipeIssue['c|' + lp.id], 'free');
+
+    section('Напоры у коллекторных узлов этажей и обвязка насосной');
+
+    var hpr = fresh();
+    var rPr = HydCalc.run(hpr, false);
+    var fbs = rPr.net.segs.filter(function (s) { return s.kind === 'fbranch' && s.res.press; });
+    check('напор посчитан у каждого коллекторного узла (2 стояка × 9 этажей × ХВС и ГВС)', fbs.length, 36);
+    check('динамический напор у любого коллектора не меньше Hпр (насос подобран по худшему прибору)',
+        fbs.every(function (s) { return s.res.press.dyn >= hpr.survey.hPr - 1e-6; }), true);
+    check('статический напор выше динамического', fbs.every(function (s) { return s.res.press.stat > s.res.press.dyn; }), true);
+
+    var lowFb = rPr.net.byId['c|' + HydModel.expand(hpr).risers[0].floors[0].collectors[0].id + '|fb'];
+    var topFb = rPr.net.byId['c|' + HydModel.expand(hpr).risers[0].floors[8].collectors[0].id + '|fb'];
+    check('внизу напор выше, чем наверху', lowFb.res.press.dyn > topFb.res.press.dyn, true);
+
+    var hpm = fresh();
+    var pn = kinds(hpm, 'pump')[0];
+    pn.work = 2;
+    pn.reserve = 1;
+    var hpm2 = HydModel.normalize(JSON.parse(JSON.stringify(hpm)));
+    check('рабочие и резервные насосы сохраняются', kinds(hpm2, 'pump')[0].work + '+' + kinds(hpm2, 'pump')[0].reserve, '2+1');
+    check('число насосов в обвязке', HydGraph.pumpCount(pn), 3);
+    check('высота обвязки растёт с числом насосов', HydGraph.pumpHeight(pn) > HydGraph.pumpHeight({ work: 1, reserve: 0 }), true);
+    check('порты насосной разнесены на ширину обвязки', HydGraph.portsOf(pn, 'c').filter(function (q) { return q.id === 'r'; })[0].x - pn.x, 75);
+
+    section('Подбор счётчика на схеме: ручной выбор, настройки, напоры по участкам');
+
+    var hmt = fresh();
+    var mtr = kinds(hmt, 'meter')[0];
+    var rm0 = HydCalc.run(hmt, false);
+    var dev0 = rm0.net.byId['c|dev:' + mtr.id];
+    var auto = dev0.res.meter.pick;
+    check('автоподбор даёт рекомендуемый калибр', auto.c.markFull, auto.recommended.markFull);
+    check('марка импульсного счётчика с суффиксом «д»', /^ВСХНд-/.test(auto.c.mark), true);
+
+    var other = auto.list.filter(function (c) { return c !== auto.c && c.flowOk && c.hasSp; })[0];
+    mtr.chosen = { dn: other.dn, kind: other.kind, variant: other.variant };
+    var rm1 = HydCalc.run(hmt, false);
+    var dev1 = rm1.net.byId['c|dev:' + mtr.id];
+    check('выбранный вручную калибр принят', dev1.res.meter.pick.c.dn, other.dn);
+    check('отмечен ручным выбором', dev1.res.meter.manual, true);
+    check('потери учтены в напоре насоса', rm1.systems[0].pump.hp !== rm0.systems[0].pump.hp, true);
+
+    mtr.chosen = null;
+    mtr.kindFilter = 'turbine';
+    check('фильтр типа: турбинный', HydCalc.run(hmt, false).net.byId['c|dev:' + mtr.id].res.meter.pick.c.kind, 'turbine');
+    mtr.kindFilter = '';
+    mtr.qOver = 3;
+    check('заданный вручную расход перекрывает расчёт сети', HydCalc.run(hmt, false).net.byId['c|dev:' + mtr.id].res.meter.q, 3);
+    mtr.qOver = 0;
+
+    hmt.survey.meter.pulse = false;
+    check('без импульсного выхода суффикса нет', /^ВСХН-/.test(HydCalc.run(hmt, false).net.byId['c|dev:' + mtr.id].res.meter.pick.c.mark), true);
+    hmt.survey.meter.limitVane = 0.5;
+    check('предел потерь из настроек проекта', HydCalc.run(hmt, false).net.byId['c|dev:' + mtr.id].res.meter.pick.c.limit >= 0.5, true);
+    mtr.method = 'passport';
+    var mp = HydCalc.run(hmt, false).net.byId['c|dev:' + mtr.id].res.meter.pick;
+    check('метод потерь узла — по паспорту', mp.c.h, mp.c.hPassport, 1e-9);
+
+    var hrot = fresh();
+    var mr = kinds(hrot, 'meter')[0];
+    mr.rot = 90;
+    var ids = HydGraph.portsOf(mr, 'c').map(function (q) { return q.id; }).join('');
+    check('вертикальный счётчик: порты сверху и снизу, только два', ids, 'tb');
+    mr.rot = 0;
+    check('горизонтальный счётчик: порты слева и справа', HydGraph.portsOf(mr, 'c').map(function (q) { return q.id; }).join(''), 'lr');
+
+    var hmr = HydModel.normalize(JSON.parse(JSON.stringify(hmt)));
+    check('настройки счётчика переживают запись и чтение', kinds(hmr, 'meter')[0].method + '|' + hmr.survey.meter.pulse, 'passport|false');
+
+    var rows = HydReport.meterRows(rA, h0);
+    check('в таблице подбора один водомерный узел (ввод)', rows.length, 1);
+    check('расчёт потерь для записки собран', HydMeter.reportLines(rows.map(function (r) {
+        return { place: r.place, systemName: r.systemName, qLs: r.qLs, c: r.c, method: r.method, note: r.note };
+    }), h0.survey.meter).join('\n').indexOf('По паспорту') > 0, true);
+
+    // напоры по участкам
+    var hdp = HydCalc.run(fresh(), false);
+    var inSeg = hdp.net.byId['c|in'];
+    var pumpDev = hdp.net.segs.filter(function (s) { return s.dev === 'pump'; })[0];
+    check('после ввода напор ниже Hгар', inSeg.res.hd.outDyn < kinds(h0, 'input')[0].Hgar, true);
+    check('после насоса напор выше, чем до насоса', pumpDev.res.hd.outDyn > pumpDev.res.hd.inDyn, true);
+    check('скачок напора на насосе = Hp − Hнс', pumpDev.res.hd.outDyn - pumpDev.res.hd.inDyn, hdp.systems[0].pump.hp - h0.survey.hNs, 1e-9);
+
+    var hnr = fresh();
+    hnr.survey.regulators = 'none';
+    var rnr = HydCalc.run(hnr, false);
+    var dl = rnr.systems[0].dict.leaf;
+    check('у диктующего прибора напор равен Hпр', rnr.net.byId[dl.seg].res.hd.outDyn, hnr.survey.hPr, 1e-6);
+    check('статический напор не меньше динамического', rnr.net.segs.every(function (s) { return !s.res.hd || s.res.hd.outStat >= s.res.hd.outDyn - 1e-9; }), true);
+
+    section('Несколько зон в одном проекте');
+
+    var hz = HydModel.normalize(JSON.parse(JSON.stringify(HydModel.blank())));
+    HydGraph.starter(hz, { sections: 1, risers: 2, floors: 20, zones: 2 });
+    var rz = HydCalc.run(hz, false);
+    check('две зоны — две насосные установки', rz.systems.filter(function (s) { return s.kind === 'pump'; }).length, 2);
+    check('у зон свои названия', rz.systems.map(function (s) { return s.name; }).join(','), '1 зона,2 зона');
+    check('две ИТП', kinds(hz, 'itp').length, 2);
+    var risersZ = HydModel.risers(hz);
+    check('стояки второй зоны начинаются выше (11-й этаж), ниже — транзит', risersZ[2].floorFrom + '-' + risersZ[2].floorTo, '11-20');
+    check('стояки первой зоны: этажи 1–10', risersZ[0].floorFrom + '-' + risersZ[0].floorTo, '1-10');
+    check('замечаний нет', rz.warnings.join('; '), '');
+    check('напор второй зоны выше напора первой', rz.systems[1].pump.hp > rz.systems[0].pump.hp, true);
+    check('ГВС скопирована для обеих зон: стояки достигнуты на листе ГВС', rz.net.reached.h[risersZ[3].id] === true && rz.net.reached.h[risersZ[0].id] === true, true);
+    check('всего людей: 4 стояка', rz.people, 4 * (HydModel.risers(hz)[0].floorTo - HydModel.risers(hz)[0].floorFrom + 1) * 12);
+
+    section('Расчётные точки диктующего пути');
+
+    var hrt = fresh();
+    hrt.survey.regulators = 'none';
+    var rrt = HydCalc.run(hrt, false);
+    var rte = rrt.systems[0].route;
+    check('маршрут построен', !!rte, true);
+    check('точек на одну больше, чем участков', rte.points.length, rte.sections.length + 1);
+    check('точки пронумерованы подряд с единицы', rte.points.map(function (p) { return p.no; }).join(','), rte.points.map(function (p, i) { return i + 1; }).join(','));
+    check('первый участок — ввод, затем счётчик', rte.sections[0].type + ',' + rte.sections[2].type, 'input,meter');
+    check('в пути есть насосная и ИТП', rte.sections.some(function (s) { return s.type === 'pump'; }) && rte.sections.some(function (s) { return s.type === 'itp'; }), true);
+    check('стояк свёрнут в один участок', rte.sections.filter(function (s) { return s.type === 'riser'; }).length, 1);
+    check('напор в первой точке равен Hгар', rte.points[0].dyn, kinds(hrt, 'input')[0].Hgar, 1e-9);
+    check('напор в последней точке (у прибора) равен Hпр', rte.points[rte.points.length - 1].dyn, hrt.survey.hPr, 1e-6);
+
+    var okSum = rte.sections.every(function (s) {
+        return Math.abs(s.dynStart + s.gain - s.equip - s.hFr - s.local - s.dz - s.dynEnd) < 1e-6;
+    });
+    check('в каждом участке: начало + насос − потери − подъём = конец', okSum, true);
+    var sumLoss = 0;
+    rte.sections.forEach(function (s) { sumLoss += s.hFr + s.local + s.equip; });
+    check('сумма потерь по таблице = ΣHl,tot', sumLoss, rrt.systems[0].dict.part.tot, 1e-6);
+
+    section('Выгрузка в AutoCAD (DXF) и PDF');
+
+    var hdx = fresh();
+    var rdx = HydCalc.run(hdx, false);
+    var bytesDxf = HydDxf.build(rdx, hdx, { points: 'auto' });
+    var textDxf = '';
+    for (var di = 0; di < bytesDxf.length; di++) textDxf += String.fromCharCode(bytesDxf[di]);
+    check('DXF: версия R12 и кодовая страница 1251', textDxf.indexOf('AC1009') > 0 && textDxf.indexOf('ANSI_1251') > 0, true);
+    check('DXF: блоки условных знаков (счётчик, задвижка, насос)', ['УГО_Счётчик', 'задв', 'насос', 'манометр'].every(function (n) {
+        return textDxf.indexOf(String.fromCharCode.apply(null, HydDxf.cp1251(n))) > 0;
+    }), true);
+    check('DXF: слои ХВС и ГВС как в образце', textDxf.indexOf(String.fromCharCode.apply(null, HydDxf.cp1251('ВК_В1'))) > 0
+        && textDxf.indexOf(String.fromCharCode.apply(null, HydDxf.cp1251('ВК_Т3'))) > 0, true);
+    check('DXF: завершён EOF', textDxf.slice(-5).trim(), 'EOF');
+    check('DXF: диаметр в подписях — код AutoCAD %%c, а не «?»', textDxf.indexOf('%%c') > 0, true);
+
+    var ddoc = HydDxf.makeDoc(rdx, hdx, { points: 'auto' }, ['c']);
+    check('примитивы одной схемы набраны (труб, текстов, вставок знаков)',
+        ddoc.ops.some(function (o) { return o.t === 'poly'; }) && ddoc.ops.some(function (o) { return o.t === 'text'; }) && ddoc.ops.some(function (o) { return o.t === 'insert' && o.name === 'УГО_Счётчик'; }), true);
+    check('в блоке счётчика прямоугольник, диагональ и заливка', ddoc.blockOps['УГО_Счётчик'].filter(function (o) { return o.t === 'solid'; }).length, 1);
+
+    var hdv = fresh();
+    var rotM = kinds(hdv, 'meter')[0];
+    rotM.rot = 90;
+    var vdoc = HydDxf.makeDoc(HydCalc.run(hdv, false), hdv, {}, ['c']);
+    check('вертикальный счётчик вставлен с поворотом 90°', vdoc.ops.some(function (o) { return o.t === 'insert' && o.name === 'УГО_Счётчик' && o.rot === 90; }), true);
+
+    section('Счётчики');
+
+    var apt = rA.net.byId['c|' + apt1];
+    check('квартирный узел подобран', !!(apt.res.meter && apt.res.meter.pick && apt.res.meter.pick.c), true);
+    check('Ду квартирного счётчика 15', apt.res.meter.pick.c.dn, 15);
+    var mm = HydMeter.pick(6.2, false, HydMeter.defaults());
+    check('общий на вводе 6,2 л/с — подобран счётчик', !!mm.c, true);
+    check('потери по СП = S·q²', mm.c.hSp, HydMeter.spFor(mm.c.dn).s * 6.2 * 6.2, 1e-9);
+
+    section('Подбор насосов по каталогу');
+
+    function wilo(purpose, type, q, hh, qa, ha, power, cnt) {
+        var lines = ['Тип: ' + type, 'Назначение: ' + purpose, 'Исходные параметры', 'Подача ' + q + ' л/с', 'Напор ' + hh + ' м',
+            'Фактическая рабочая точка', 'Подача ' + qa + ' л/с', 'Напор ' + ha + ' м', 'Мощность P2 1,5 kW', 'КПД 61 %', 'Данные мотора',
+            'Номинальная мощность Р2 ' + power + ' kW', 'Кол-во рабочих насосов ' + cnt[0], 'Кол-во резервных насосов ' + cnt[1]];
+        return HydPumps.parse([{ lines: lines.map(function (t) { return { text: t }; }) }], 'sheet.pdf');
+    }
+
+    var hp = HydModel.normalize(JSON.parse(JSON.stringify(hz)));
+    var rp = HydCalc.run(hp, false);
+    var pz1 = rp.systems[0];
+    var pz2 = rp.systems[1];
+    var sh1 = wilo('ХВС 1 зона', 'CO 2 MVL 806/SK-FFS-R', pz1.pump.q.toFixed(1), pz1.pump.hp.toFixed(1), pz1.pump.q + 1, pz1.pump.hp + 2, '2,2', [2, 1]);
+    var sh2 = wilo('ХВС 2 зона', 'CO 2 MVL 808/SK-FFS-R', pz2.pump.q.toFixed(1), pz2.pump.hp.toFixed(1), pz2.pump.q + 1, pz2.pump.hp - 5, '3', [2, 0]);
+    var shj = wilo('жокей', 'CO 1 MVL 404/J-ET', 0.5, 40, 0.5, 40, '0,37', [1, 0]);
+
+    check('лист: марка', sh1.name, 'CO 2 MVL 806/SK-FFS-R');
+    check('лист: рабочая точка Hф', sh1.actual.H, pz1.pump.hp + 2, 0.01);
+    check('лист: мощность 2,2 (P2 не приклеилась)', sh1.power, 2.2, 1e-9);
+    check('лист: количество «2+1»', sh1.count, '2+1');
+    check('лист: жокей распознан', shj.role, 'jockey');
+    var shm = HydPumps.parse([{ lines: ['Тип: CO 2 MVL 806/SK-FFS-R', 'Фактическая рабочая точка', 'Подача 17 м³/ч', 'Напор 57 м'].map(function (t) { return { text: t }; }) }], 'm.pdf');
+    check('лист в м³/ч пересчитан в л/с', shm.actual.Q, 4.722, 0.001);
+
+    var asg = HydPumps.assign([sh2, sh1, shj], rp.systems);
+    check('лист 1 зоны ложится на 1 зону', asg.assigned[pz1.id] === sh1, true);
+    check('лист 2 зоны ложится на 2 зону', asg.assigned[pz2.id] === sh2, true);
+    check('жокей пропущен', asg.skipped.length, 1);
+
+    hp.pumpSel[pz1.id] = HydPumps.fromSheet(sh1);
+    hp.pumpSel[pz2.id] = HydPumps.fromSheet(sh2);
+    var prow = HydPumps.rows(rp, hp);
+    check('зона в таблице — число', prow[0].cells[1], 1);
+    check('таблица: строка на каждую установку', prow.length, 2);
+    check('таблица: восемь колонок', prow[0].cells.length, 8);
+    check('Qф ≥ Qтр и Hф ≥ Hтр — проходит', prow[0].check.ok, true);
+    check('Hф ниже Hтр — не проходит', prow[1].check.ok, false);
+    check('без выбора — не подобран', HydPumps.check(null, pz1.pump).ok, null);
+    check('количество берётся с листа', prow[0].cells[3], '2+1');
+
+    var hpr = HydModel.normalize(JSON.parse(JSON.stringify(hp)));
+    check('выбор насосов переживает запись и чтение', JSON.stringify(hpr.pumpSel), JSON.stringify(hp.pumpSel));
+    var gone = JSON.parse(JSON.stringify(hp));
+    gone.canvas.nodes = gone.canvas.nodes.filter(function (n) { return n.id !== pz2.id; });
+    gone.canvas.pipes = gone.canvas.pipes.filter(function (p) { return p.a !== pz2.id && p.b !== pz2.id; });
+    check('выбор удалённого насоса отбрасывается', Object.keys(HydModel.normalize(gone).pumpSel).length, 1);
+    var hpl = HydModel.normalize(JSON.parse(JSON.stringify(hp)));
+    delete hpl.pumpSel[pz1.id];
+    check('лист в пустую установку — «добавлено»', HydPumps.place(hpl, pz1, sh1).kind, 'added');
+    check('тот же лист ещё раз — «обновлено»', HydPumps.place(hpl, pz1, sh1).kind, 'updated');
+    check('другая марка — «заменено», с «было → стало»', HydPumps.place(hpl, pz1, sh2).text.indexOf('CO 2 MVL 806/SK-FFS-R → CO 2 MVL 808/SK-FFS-R') > 0, true);
+    check('в лист записан заданный напор и дата загрузки', hpl.pumpSel[pz1.id].dutyH > 0 && hpl.pumpSel[pz1.id].loadedAt.length === 10, true);
+    check('расхождение листа с расчётом замечено', HydPumps.drift({ dutyH: pz1.pump.hp + 10 }, pz1.pump) !== '' && HydPumps.drift({ dutyH: pz1.pump.hp }, pz1.pump) === '', true);
+    check('заданный расход в листе: в пределах 10 % — замечаний нет', HydPumps.drift({ dutyQ: pz1.pump.q * 1.08, dutyH: pz1.pump.hp }, pz1.pump), '');
+    check('заданный расход в листе: больше 10 % — замечено', /расход/.test(HydPumps.drift({ dutyQ: pz1.pump.q * 1.12, dutyH: pz1.pump.hp }, pz1.pump)), true);
+    check('заданный расход меньше расчётного больше чем на 10 % — замечено', /расход/.test(HydPumps.drift({ dutyQ: pz1.pump.q * 0.85 }, pz1.pump)), true);
+    var qc = pz1.pump;
+    check('Qф в пределах 10 % выше Qтр — подбор без замечаний', HydPumps.check({ Qf: qc.q * 1.09, Hf: qc.hp + 1 }, qc).qWarn, '');
+    check('Qф выше Qтр больше чем на 10 % — подсветка «неоптимален»', /неоптимален/.test(HydPumps.check({ Qf: qc.q * 1.2, Hf: qc.hp + 1 }, qc).qWarn), true);
+    check('при этом насос проходит (замечание, а не отказ)', HydPumps.check({ Qf: qc.q * 1.2, Hf: qc.hp + 1 }, qc).ok, true);
+    check('Qф ниже Qтр — по-прежнему «не проходит», без подсветки запаса', HydPumps.check({ Qf: qc.q * 0.8, Hf: qc.hp + 1 }, qc).ok === false && HydPumps.check({ Qf: qc.q * 0.8, Hf: qc.hp + 1 }, qc).qWarn === '', true);
+
+    check('Excel: появился лист «Насосы»', HydReport.sheets(rp, hp).some(function (s) { return s.name === 'Насосы'; }), true);
+    var bdx = HydDxf.build(rp, hp, { points: 'auto' });
+    var tdx = '';
+    for (var bi = 0; bi < bdx.length; bi++) tdx += String.fromCharCode(bdx[bi]);
+    check('DXF: марка выбранной установки подписана у насосной', tdx.indexOf('CO 2 MVL 806/SK-FFS-R') > 0, true);
+
+    section('Данные для записки');
+
+    var hnote = fresh();
+    hnote.note.fireExt = 25;
+    hnote.note.itpPlace = 'в подвале';
+    hnote.note.catHp = 'IV';
+    var hn2 = HydModel.normalize(JSON.parse(JSON.stringify(hnote)));
+    check('данные записки переживают запись и чтение', hn2.note.fireExt + '|' + hn2.note.itpPlace, '25|в подвале');
+    check('неизвестная категория сбрасывается', hn2.note.catHp, '');
+    check('по умолчанию ВПВ есть, суток в году 365', hn2.note.hasFire === true && hn2.note.yearDays === 365, true);
+
+    section('Задание в ИТП');
+
+    var hitp = HydModel.normalize(JSON.parse(JSON.stringify(HydModel.blank())));
+    HydGraph.starter(hitp, { sections: 1, risers: 2, floors: 20, zones: 2 });
+    var ritp = HydCalc.run(hitp, false);
+    var ditp = HydItp.data({ alphaMode: 'interp', object: { name: '' } }, ritp, hitp);
+    check('по ИТП на каждую зону', ditp.itps.length, 2);
+    check('марки систем по бланку: Т3.1 и Т3.2', ditp.itps.map(function (x) { return x.m3; }).join(','), 'Т3.1,Т3.2');
+    check('отметка верхнего прибора выше нижнего, 2-я зона выше 1-й', ditp.itps[0].high > ditp.itps[0].low && ditp.itps[1].low > ditp.itps[0].high, true);
+    check('напор на вводе в ИТП 2-й зоны выше, чем 1-й', ditp.itps[1].headIn > ditp.itps[0].headIn, true);
+    check('часовой расход больше секундного (м³/ч > л/с)', ditp.itps[0].res.hour > ditp.itps[0].res.sec, true);
+    check('циркуляция = 25 % секундного Т3', ditp.itps[0].res.circ, Math.round(ditp.itps[0].res.sec * 0.25 * 1000) / 1000, 1e-9);
+    check('труба на выходе подобрана по скорости', ditp.itps[0].res.pipe.ok, true);
+    check('общий расход здания не больше суммы зон', ditp.total.sec <= ditp.itps[0].all.sec + ditp.itps[1].all.sec + 1e-9, true);
+    check('тепло: 1 Гкал/ч = 1163 кВт', HydItp.heat(5, 1, ditp.p).kw / HydItp.heat(5, 1, ditp.p).gcal, 1163, 1e-6);
+    check('отметка в бланке: знак и запятая', HydItp.fmtElev(-4.2) + '|' + HydItp.fmtElev(45.95), '"-" 4,200 м|"+" 45,950 м');
+    check('параметры ИТП переживают запись и чтение', HydModel.normalize(JSON.parse(JSON.stringify(hitp))).itp.circFactor, 0.25);
+
+    section('Удаление: висячие тройники');
+
+    var hor = fresh();
+    var tA = HydModel.newNode(hor, 'tee', 500, 500, 'c');
+    var tB = HydModel.newNode(hor, 'tee', 560, 500, 'c');
+    hor.canvas.nodes.push(tA, tB);
+    HydGraph.addPipe(hor, tA.id, tB.id, 'c');
+    var nBefore = hor.canvas.nodes.length;
+    HydGraph.removePipe(hor, hor.canvas.pipes[hor.canvas.pipes.length - 1].id);
+    check('после удаления единственной трубы оба тройника исчезают', nBefore - hor.canvas.nodes.length, 2);
+    var oldRaw = JSON.parse(JSON.stringify(hor));
+    oldRaw.canvas.nodes.push({ id: 'ZZ', kind: 'tee', x: 1, y: 1, sheet: 'c' });
+    check('висящий тройник из старого проекта убирается при чтении', HydModel.normalize(oldRaw).canvas.nodes.filter(function (n) { return n.id === 'ZZ'; }).length, 0);
+
+    section('Диагностика труб, которые не считаются');
+
+    var hdg = fresh();
+    var itpD = kinds(hdg, 'itp')[0];
+    var hotP = hdg.canvas.pipes.filter(function (p) { return p.sheet === 'h'; })[0];
+    var twinP = HydGraph.addPipe(hdg, hotP.a, hotP.b, 'h', []);
+    check('вторая труба между теми же объектами видна как параллельная', HydGraph.parallelOf(hdg, twinP) === hotP, true);
+    check('такая труба помечается «кольцо»', HydCalc.run(hdg, false).net.pipeIssue['h|' + twinP.id], 'ring');
+    check('дубли убираются, первая труба остаётся', HydGraph.dropDuplicates(hdg) === 1 && hdg.canvas.pipes.indexOf(hotP) >= 0, true);
+    check('проект с дублем при чтении очищается', HydModel.normalize(JSON.parse(JSON.stringify((function () { var q = fresh(); var f = q.canvas.pipes[0]; q.canvas.pipes.push({ id: 'PZ', a: f.b, b: f.a, sheet: f.sheet, pts: [] }); return q; })()))).canvas.pipes.length, fresh().canvas.pipes.length);
+
+    var hnc = fresh();
+    hnc.canvas.pipes = hnc.canvas.pipes.filter(function (p) { return !(p.sheet === 'c' && (p.a === kinds(hnc, 'itp')[0].id || p.b === kinds(hnc, 'itp')[0].id)); });
+    HydGraph.dropOrphanTees(hnc);
+    var rnc = HydCalc.run(hnc, false);
+    check('ИТП не подключена на листе ХВС — горячие трубы помечены причиной, а не «кольцом»', Object.keys(rnc.net.pipeIssue).map(function (k) { return rnc.net.pipeIssue[k]; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(','), 'itp-cold');
+    check('здоровая схема — без замечаний по трубам', Object.keys(HydCalc.run(fresh(), false).net.pipeIssue).length, 0);
+
+    section('Метод потерь счётчиков и отметки приборов');
+
+    var hmm = fresh();
+    var rawm = JSON.parse(JSON.stringify(hmm));
+    rawm.survey.meterMethod = 'passport';
+    check('старый выбор «по паспорту» из опросника переносится в meter.method', HydModel.normalize(rawm).survey.meter.method, 'passport');
+    var hpm = fresh();
+    hpm.survey.meter.method = 'passport';
+    var rpm = HydCalc.run(hpm, false);
+    var mainRow = rpm.net.segs.filter(function (s) { return s.dev === 'meter' && s.res.meter; })[0];
+    check('метод «по паспорту» доходит до подбора счётчика', mainRow.res.meter.pick.c.h, mainRow.res.meter.pick.c.hPassport, 1e-9);
+    var rsp = HydCalc.run(fresh(), false);
+    var mrow = rsp.net.segs.filter(function (s) { return s.dev === 'meter' && s.res.meter; })[0];
+    check('по умолчанию — по СП', mrow.res.meter.pick.c.h, mrow.res.meter.pick.c.hSp, 1e-9);
+    var spn = rsp.systems[0].span;
+    check('у системы есть отметки нижнего и верхнего приборов', spn.low.elev < spn.high.elev, true);
+
+    section('Отметки этажей стояка');
+
+    var hlv = fresh();
+    var rv = HydModel.risers(hlv)[0];
+    var lv0 = HydModel.levels(hlv, rv);
+    check('по умолчанию этажи идут с типовой высотой от отметки опросника', lv0[1] + '|' + lv0[2] + '|' + lv0[3], hlv.survey.groundElev + '|' + (hlv.survey.groundElev + hlv.survey.floorHeight) + '|' + (hlv.survey.groundElev + 2 * hlv.survey.floorHeight));
+    rv.level1 = 100;
+    rv.heights = { 1: 4.5, 2: 3.6 };
+    var lv1 = HydModel.levels(hlv, rv);
+    check('отметка 1 этажа и высоты 1-го, 2-го этажей', lv1[1] + '|' + lv1[2] + '|' + lv1[3] + '|' + lv1[4], '100|104.5|108.1|' + (108.1 + hlv.survey.floorHeight));
+    rv.elevs = { 4: 120 };
+    check('вписанная отметка этажа главнее высот ниже', HydModel.levels(hlv, rv)[4], 120);
+    check('высота этажа 3 получается из разницы отметок', HydModel.floorHeightOf(hlv, rv, 3), 120 - 108.1, 1e-9);
+    check('floorElev согласован с levels', HydModel.floorElev(hlv, rv, 3), 108.1, 1e-9);
+    rv.baseElev = 97;
+    var rlv = HydCalc.run(hlv, false);
+    var lens = [1, 2, 3, 4].map(function (k) { return rlv.net.byId['c|' + rv.id + '|R|' + k].L; });
+    check('длина звеньев стояка = высоты этажей (низ 97 → 100, 4,5, 3,6, 11,9)', lens.map(function (x) { return Math.round(x * 100) / 100; }).join(','), '3,4.5,3.6,11.9');
+    var rtrip = HydModel.normalize(JSON.parse(JSON.stringify(hlv)));
+    var rv2 = HydModel.risers(rtrip)[0];
+    check('отметки этажей переживают запись и чтение', rv2.level1 + '|' + rv2.heights[2] + '|' + rv2.elevs[4], '100|3.6|120');
+    rv.level1 = null; rv.heights = {}; rv.elevs = {};
+    check('сброс возвращает типовые отметки', HydModel.levels(hlv, rv)[2], hlv.survey.groundElev + hlv.survey.floorHeight);
+
+    section('Квартирный счётчик Ду 15 Qn=1,5');
+
+    var hm = fresh();
+    check('по умолчанию квартирный счётчик Qn=1,5', hm.survey.meter.aptQn, 1.5);
+    var rm = HydCalc.run(hm, false);
+    var aptSegs = rm.net.segs.filter(function (s) { return s.meter === 'apt' && s.res.meter && s.res.meter.pick && s.res.meter.pick.c; });
+    check('есть квартирные счётчики', aptSegs.length > 0, true);
+    check('все квартирные — ВСГНд/ВСХНд-15 Qn=1,5', aptSegs.every(function (s) { return s.res.meter.pick.c.dn === 15 && s.res.meter.pick.c.qn === 1.5; }), true);
+    check('потери по Qn=1,5 малы (K=1111)', aptSegs.every(function (s) { return s.res.meter.pick.c.hPassport < 1.5; }), true);
+    hm.survey.meter.aptQn = 0;
+    var rm0 = HydCalc.run(hm, false);
+    var auto = rm0.net.segs.filter(function (s) { return s.meter === 'apt' && s.res.meter && s.res.meter.pick && s.res.meter.pick.c; });
+    check('0 — подбор по расходу как раньше (Qn=0,6)', auto.some(function (s) { return s.res.meter.pick.c.qn === 0.6; }), true);
+
+    section('Письмо на подбор насосов');
+
+    var hq = fresh();
+    hq.survey.objectName = 'Парковый 9';
+    var rq = HydCalc.run(hq, false);
+    var proj = { object: { name: 'Парковый 9', address: 'г. Москва' } };
+    var st = HydRequest.stations(rq, hq);
+    check('есть установки для подбора', st.length > 0, true);
+    var ml = HydRequest.letter(rq, hq, proj);
+    check('адресат по умолчанию — Ярков', ml.to, 'konstantin.yarkov@wilo.ru');
+    check('в списке адресатов Ярков и Копылов', HydRequest.CONTACTS.map(function (c) { return c.mail; }).join('|'), 'konstantin.yarkov@wilo.ru|kirill.kopylov@wilo.ru');
+    check('адреса из строки через ; и запятую', HydRequest.addresses('a@b.ru; c@d.ru, e@f.ru ').join('|'), 'a@b.ru|c@d.ru|e@f.ru');
+    check('в mailto: и .eml адреса через запятую', HydRequest.mailto({ to: 'a@b.ru; c@d.ru', subject: 's', body: 'b' }).indexOf('mailto:a%40b.ru,c%40d.ru?') === 0
+        && /To: a@b\.ru,c@d\.ru\r\n/.test(HydRequest.eml({ to: 'a@b.ru; c@d.ru', subject: 's', body: 'b', files: [] })), true);
+    check('тема — название объекта', ml.subject, 'Парковый 9');
+    check('в письме требуемые Q и H каждой установки', st.every(function (r) { return ml.body.indexOf(r.sys.name) >= 0 && /Q = [\d\s,]+ л\/с, H = [\d\s,]+ м\./.test(ml.body); }), true);
+    check('письмо про хозяйственно-питьевое водоснабжение', ml.body.indexOf('хозяйственно-питьевого водоснабжения') >= 0, true);
+    hq.note.supplierMail = 'a@b.ru';
+    hq.note.engineer = 'Иванов И. И.';
+    var ml2 = HydRequest.letter(rq, hq, proj);
+    check('адрес из проекта главнее', ml2.to, 'a@b.ru');
+    check('подпись инженера', /С уважением,\nИванов И\. И\.$/.test(ml2.body), true);
+    var em = HydRequest.eml({ to: 'a@b.ru', subject: 'Тема', body: 'строка', files: [] });
+    check('.eml — черновик для Outlook', /X-Unsent: 1/.test(em) && /Subject: =\?UTF-8\?B\?/.test(em), true);
+    var emf = HydRequest.eml({ to: 'a@b.ru', subject: 'x', body: 'y', files: [{ name: 'Расчёт.xlsx', type: 'a/b', bytes: new Uint8Array([1, 2, 3]) }] });
+    check('.eml с вложением — multipart/mixed', /multipart\/mixed/.test(emf) && /Content-Disposition: attachment/.test(emf) && /AQID/.test(emf), true);
+    check('вложение — книга Excel', HydRequest.attachments(rq, hq).length, 1);
+    check('сохранение адреса и подписи в проекте', (function () { var r = HydModel.normalize(JSON.parse(JSON.stringify(hq))); return r.note.supplierMail + '|' + r.note.engineer; })(), 'a@b.ru|Иванов И. И.');
+
+    section('Пакет листов: штамп «Приложение N»');
+
+    function tinyPdf(label) {
+        var content = 'BT /F1 12 Tf 50 700 Td (' + label + ') Tj ET';
+        return new TextEncoder().encode('%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'
+            + '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n'
+            + '4 0 obj\n<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream\nendobj\n'
+            + '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n');
+    }
+
+    var b64 = Zip.toBase64(tinyPdf('A'));
+    check('base64 туда и обратно', Zip.fromBase64(b64).length, tinyPdf('A').length);
+
+    var mergedDone = false;
+    PdfWrite.merge([{ bytes: tinyPdf('A'), stamp: 'Приложение 7' }, { bytes: tinyPdf('B'), stamp: 'Приложение 8' }]).then(function (bytes) {
+        var text = '';
+        for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+        check('склейка — PDF с двумя страницами', /^%PDF/.test(text) && /\/Count 2/.test(text), true);
+        check('на каждой странице картинка штампа', (text.match(/\/ImageMask true/g) || []).length, 2);
+        var doc = new Pdf.Doc(bytes);
+        doc.scan();
+        check('разбор собранного файла видит две страницы', Pdf.pagesOf(doc).length, 2);
+        mergedDone = true;
+    });
+
+    section('Векторный PDF схем');
+
+    var vp = PdfVec.create('Проверка');
+    var vpg = vp.page(297, 210);
+    vpg.strokeColor('#1030d0').lineWidth(0.3).moveTo(10, 10).lineTo(200, 100).stroke();
+    vpg.text('Схема холодного водоснабжения В1', [1, 0, 0, 1, 20, 150], 5, '#101010', 'Arial, sans-serif', false);
+    vp.page(420, 297).strokeColor('#000').rect(5, 5, 100, 50).stroke();
+    vp.bytes().then(function (bytes) {
+        var text = '';
+        for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+        check('векторный PDF: две страницы, линии настоящие, шрифт встроенный', /^%PDF/.test(text) && /\/Count 2/.test(text) && /\/Subtype \/Type3/.test(text) && /\/ToUnicode/.test(text), true);
+        check('в страницу кладётся не картинка схемы, а контур', /\/DCTDecode/.test(text), false);
+        var d = new Pdf.Doc(bytes);
+        d.scan();
+        check('разбор векторного PDF видит две страницы', Pdf.pagesOf(d).length, 2);
+    });
+
+    var hv = fresh();
+    var rv = HydCalc.run(hv, false);
+    HydPdf.build(rv, hv, { points: 'auto' }).then(function (bytes) {
+        var d = new Pdf.Doc(bytes);
+        d.scan();
+        check('чертёж в PDF: листы ХВС и ГВС', Pdf.pagesOf(d).length, 2);
+    }, function (e) { check('чертёж в PDF собирается', e.message, 'ok'); });
+
+    var hs = fresh();
+    var pumpNode = hs.canvas.nodes.filter(function (n) { return n.kind === 'pump'; })[0];
+    hs.pumpSel[pumpNode.id] = Object.assign(HydPumps.blankSel(), { name: 'COR-1', sheet: 'x.pdf', data: b64 });
+    var hsr = HydModel.normalize(JSON.parse(JSON.stringify(hs)));
+    check('файл листа переживает запись и чтение проекта', hsr.pumpSel[pumpNode.id].data, b64);
+
+    section('Задание от ВК для ЭЛ и СС');
+
+    var he = fresh();
+    var rel = HydCalc.run(he, false);
+    var il = HydElss.items({ object: {} }, rel, he);
+    check('автоматические строки: насосная, счётчики, датчики давления', il.some(function (x) { return /^pump:/.test(x.key); }) && il.some(function (x) { return /^meter:/.test(x.key); }) && il.some(function (x) { return x.key === 'press'; }), true);
+    check('датчиков давления: вводы + по два на насосную', il.filter(function (x) { return x.key === 'press'; })[0].work, he.canvas.nodes.filter(function (n) { return n.kind === 'input'; }).length + 2 * rel.systems.filter(function (s) { return s.pump && s.pump.pumped; }).length);
+    check('число квартирных счётчиков = числу выходов с учётом', il.filter(function (x) { return /^apt:/.test(x.key); }).every(function (x) { return x.work > 0; }), true);
+    check('без помещения строка помечена', il[0].miss.indexOf('помещение') >= 0, true);
+    he.elss.auto[il[0].key] = { room: '98', note: '', name: '', dispatch: '', protocol: '', kw: null, volt: null, skip: false };
+    check('помещение из правки подставляется', HydElss.items({ object: {} }, rel, he)[0].room, '98');
+    he.elss.rows.push({ cat: 'Воронка с электрообогревом', name: 'В', desc: '', work: 4, reserve: 0, kw: null, volt: 220, dispatch: 'Нет', protocol: '-', room: 'Кровля', note: '', skip: false, act: null });
+    var all = HydElss.items({ object: {} }, rel, he);
+    check('ручная строка добавляется в конец', all[all.length - 1].cat, 'Воронка с электрообогревом');
+    check('«для СС» — только с диспетчеризацией', HydElss.selected(all, 'ss').every(function (x) { return x.dispatch === 'Да'; }), true);
+    check('«для ЭЛ» — строки с нагрузкой', HydElss.selected(all, 'el').every(function (x) { return x.kw > 0 || x.volt > 0 || x.cat === 'Насосная станция'; }), true);
+    var back = HydModel.normalize(JSON.parse(JSON.stringify(he)));
+    check('строки задания переживают запись и чтение', back.elss.rows.length + '|' + back.elss.auto[il[0].key].room, '1|98');
+    check('электропривод ADL SQ 07.2, стандартное время: 0,06 кВт', HydElss.actuator('SQ 07.2', '8* / 11').v.kw, 0.06);
+    check('электропривод SQ 14.2 на 24 с: 0,19 кВт', HydElss.actuator('SQ 14.2', '24').v.kw, 0.19);
+    check('текст привода без звёздочки', HydElss.actuatorText('SQ 05.2', '8* / 11', 380).indexOf('*') < 0, true);
+
+    section('Разделение по ИТП (отдельные задания)');
+
+    var hi = HydModel.blank();
+    HydGraph.starter(hi, { sections: 1, risers: 2, floors: 12, zones: 3 });
+    var itpNodes = hi.canvas.nodes.filter(function (n) { return n.kind === 'itp'; });
+    var ri = HydCalc.run(hi, false);
+    var di = HydItp.data({ alphaMode: '' }, ri, hi);
+    check('ИТП без номеров — одна группа без подписи (задание на здание)', di.groups.length + '|' + di.groups[0].label + '|' + di.numbered, '1||false');
+    check('в общей группе три ИТП', di.groups[0].itps.length, 3);
+
+    itpNodes[0].itpNo = 1;
+    itpNodes[1].itpNo = 2;
+    var di2 = HydItp.data({ alphaMode: '' }, ri, hi);
+    check('две ИТП с номерами и общая: три группы', di2.groups.map(function (g) { return g.label; }).join('|'), 'ИТП 1|ИТП 2|ИТП (общий)');
+    check('нагрузка группы — только её потребители (меньше свода по зданию)', di2.groups.every(function (g) { return g.total.hour < di2.total.hour; }), true);
+    check('расход комплекса — свод по вероятности, он меньше арифметической суммы по ИТП', di2.groups.reduce(function (a, g) { return a + g.total.hour; }, 0) > di2.total.hour, true);
+    check('циркуляция по группам складывается в здание', Math.abs(di2.groups.reduce(function (a, g) { return a + g.total.circ; }, 0) - di2.total.circ) < 0.002, true);
+
+    itpNodes[2].itpNo = 1;
+    var di3 = HydItp.data({ alphaMode: '' }, ri, hi);
+    check('одинаковый номер у двух ИТП — одна ИТП из двух узлов', di3.groups.map(function (g) { return g.label + ':' + g.itps.length; }).join('|'), 'ИТП 1:2|ИТП 2:1');
+
+    var back2 = HydModel.normalize(JSON.parse(JSON.stringify(hi)));
+    check('номер ИТП переживает запись и чтение', back2.canvas.nodes.filter(function (n) { return n.kind === 'itp'; }).map(function (n) { return n.itpNo; }).join(','), '1,2,1');
+
+    section('Лист «Квартиры по этажам»');
+
+    var ha = HydModel.blank();
+    HydGraph.starter(ha, { sections: 1, risers: 2, floors: 6, zones: 2 });
+    var outsA = [];
+    ha.floorTypes[0].collectors.forEach(function (c) { c.outlets.forEach(function (o) { outsA.push(o); }); });
+    outsA.forEach(function (o, i) { o.rooms = [2, 1, 3, 0][i % 4]; o.count = 1; });
+    var ra = HydCalc.run(ha, false);
+    var sa = HydReport.aptSheet(ra, ha);
+    var ta = sa.blocks[1].rows;
+    var grand = ta[ta.length - 1];
+    var apartments = HydModel.expand(ha).outlets.length;
+    check('итого по зданию = число квартир модели', grand[9], apartments);
+    check('по типам: студии, 1К, 2К, 3К поровну (по выходам типа этажа)', grand.slice(3, 7).join(','), [0, 1, 2, 3].map(function () { return apartments / outsA.length; }).join(','));
+    check('сумма по типам равна всего квартир', grand.slice(3, 9).reduce(function (a, b) { return a + b; }, 0), apartments);
+    check('есть итоги по каждой зоне', ta.filter(function (r) { return /^Итого: /.test(r[0]); }).length, 2);
+    check('жителей по таблице «люди в квартире»', grand[10] > 0, true);
+    check('поэтажная раскладка по зонам: блок на зону', sa.blocks.filter(function (b) { return b.kind === 'title' && /квартиры по этажам/.test(b.text); }).length, 2);
+    check('лист входит в выгрузку в Excel', HydReport.sheets(ra, ha).some(function (s) { return s.name === 'Квартиры по этажам'; }), true);
+
+    /* ---------------------------------------------------------------- итог */
+    var summary = document.getElementById('summary');
+
+    if (failed === 0) {
+        summary.className = 'ok';
+        summary.textContent = 'Все проверки пройдены: ' + passed;
+    } else {
+        summary.className = 'bad';
+        summary.textContent = 'Не сошлось проверок: ' + failed + ' из ' + (passed + failed);
+    }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,612 @@
+/*
+    Бело-синее оформление с зелёным акцентом.
+
+    Тёмной темы нет намеренно: это чертёжный инструмент, схема печатается
+    и вставляется в пояснительную записку, и белый фон здесь не выбор вкуса,
+    а требование к результату.
+*/
+
+:root {
+    --bg: #F5F9FD;
+    --panel: #FFFFFF;
+    --border: #DCE7F2;
+    --border-strong: #C3D6E8;
+    --text: #1B2A38;
+    --dim: #5B7186;
+    --blue: #1D6FB8;
+    --blue-hover: #2E86D6;
+    --blue-soft: #EAF3FB;
+    --green: #17916B;
+    --green-soft: #E4F5EE;
+    --red: #D2413A;
+    --teal: #1F9BB5;
+    --violet: #7A5AA8;
+    --orange: #E8892B;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    height: 100%;
+    margin: 0;
+    font: 13px/1.45 "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+.hidden { display: none !important; }
+.spacer { flex: 1 1 auto; }
+
+/* --- шапка ---------------------------------------------------------------- */
+
+.topbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 8px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+
+.brand {
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--blue);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.brand span {
+    display: block;
+    font-weight: 400;
+    font-size: 10.5px;
+    color: var(--dim);
+    letter-spacing: 0;
+}
+
+.name {
+    width: 200px;
+    padding: 5px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    font: inherit;
+    color: var(--text);
+}
+
+.status {
+    color: var(--dim);
+    font-size: 12px;
+    min-width: 12em;
+}
+
+.status.warn { color: var(--orange); }
+.status.done { color: var(--green); }
+
+/* --- поля и кнопки -------------------------------------------------------- */
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: var(--dim);
+}
+
+.field.inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+}
+
+.field select,
+.field input {
+    font: 13px/1.3 "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    padding: 4px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: #fff;
+    max-width: 100%;
+}
+
+.check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    margin: 4px 0;
+    cursor: pointer;
+}
+
+button {
+    font: 12.5px/1.3 "Segoe UI", Arial, sans-serif;
+    color: var(--text);
+    background: #fff;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+button:hover { border-color: var(--blue); color: var(--blue); }
+
+button.primary {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+    font-weight: 600;
+    padding: 6px 16px;
+}
+
+button.primary:hover { background: #148060; border-color: #148060; color: #fff; }
+
+button.mini {
+    font-size: 11px;
+    padding: 2px 7px;
+    color: var(--dim);
+}
+
+kbd {
+    font: 11px Consolas, monospace;
+    background: var(--blue-soft);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    color: var(--dim);
+}
+
+/* --- основная область ----------------------------------------------------- */
+
+main {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.panel {
+    background: var(--panel);
+    padding: 10px 12px;
+    overflow-y: auto;
+    flex: 0 0 auto;
+}
+
+.panel.left { width: 236px; border-right: 1px solid var(--border); }
+.panel.right { width: 264px; border-left: 1px solid var(--border); }
+
+.panel h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--dim);
+    margin: 14px 0 7px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.panel h3:first-child { margin-top: 0; }
+.panel .field { margin-bottom: 7px; }
+
+.hint {
+    font-size: 11.5px;
+    color: var(--dim);
+    line-height: 1.5;
+    margin: 8px 0 0;
+}
+
+/* --- инструменты ---------------------------------------------------------- */
+
+.tools { display: flex; flex-direction: column; gap: 4px; }
+
+.tools button {
+    text-align: left;
+    padding: 6px 9px;
+    border-left-width: 4px;
+}
+
+.tools button.active {
+    background: var(--blue-soft);
+    border-color: var(--blue);
+    color: var(--blue);
+    font-weight: 600;
+}
+
+.tools button.t3 { border-left-color: var(--red); }
+.tools button.t4 { border-left-color: var(--teal); }
+.tools button.link { border-left-color: var(--violet); }
+.tools button.itp { border-left-color: var(--blue); }
+.tools button.valve { border-left-color: var(--green); }
+.tools button.erase { border-left-color: #9FB3C4; }
+
+/* --- холст ---------------------------------------------------------------- */
+
+.centre {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+/*
+    Панель над схемой переносится по строкам.
+
+    Без переноса она просто обрезалась правым краем, и кнопки «Картинка»
+    и «DXF» становились недоступны вовсе — не уехавшими за прокрутку,
+    а невидимыми и ненажимаемыми. Ширина окна у всех разная, видов
+    в середине десяток, и уместить всё в одну строку нельзя в принципе.
+*/
+.viewbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+
+/* Действия держатся вместе и переносятся целой группой. */
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.viewtabs { display: flex; gap: 0; }
+
+.viewtabs button {
+    border-radius: 0;
+    border-right-width: 0;
+}
+
+.viewtabs button:first-child { border-radius: 4px 0 0 4px; }
+.viewtabs button:last-child { border-radius: 0 4px 4px 0; border-right-width: 1px; }
+
+.viewtabs button.active {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+    font-weight: 600;
+}
+
+/*
+    Виды — единственная группа, которая не переносится, а прокручивается.
+
+    Их десяток, и перенос по строкам раздувал панель до четырёх рядов,
+    отъедая у схемы сотню пикселей высоты. Прокрутка держит их в одной строке:
+    видами пользуются мышью по одному, и дотянуться до «Изометрии СЗ» колесом
+    не дороже, чем взглядом по второму ряду.
+*/
+.presets {
+    display: flex;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.presets button { flex: 0 0 auto; }
+
+.presets button {
+    padding: 4px 7px;
+    font-size: 11.5px;
+    color: var(--dim);
+}
+
+.presets button.active {
+    background: var(--blue-soft);
+    border-color: var(--blue);
+    color: var(--blue);
+}
+
+.canvas-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.canvas-wrap canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    outline: none;
+    display: block;
+}
+
+/* --- инспектор ------------------------------------------------------------ */
+
+.inspector .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2.5px 0;
+    border-bottom: 1px dotted var(--border);
+    font-size: 12px;
+}
+
+.inspector .row span:first-child { color: var(--dim); }
+.inspector .row span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+.inspector h4 {
+    font-size: 12.5px;
+    margin: 10px 0 4px;
+    color: var(--blue);
+}
+
+.inspector .note {
+    font-size: 11.5px;
+    color: var(--orange);
+    margin: 6px 0 0;
+    line-height: 1.45;
+}
+
+.labels { display: flex; flex-direction: column; gap: 1px; }
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin-top: 8px;
+    font-size: 11.5px;
+    color: var(--dim);
+}
+
+.legend i {
+    display: inline-block;
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+/* --- нижняя панель с таблицами -------------------------------------------- */
+
+.dock {
+    flex: 0 0 auto;
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+}
+
+.dock.collapsed { height: 34px; }
+.dock.collapsed .dockbody { display: none; }
+
+.docktabs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 3px 10px;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+
+.tabs { display: flex; gap: 2px; flex-wrap: wrap; }
+
+.tabs button {
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 5px 11px;
+    color: var(--dim);
+}
+
+.tabs button.active {
+    color: var(--blue);
+    border-bottom-color: var(--blue);
+    font-weight: 600;
+}
+
+.dockbody {
+    flex: 1 1 auto;
+    overflow: auto;
+    min-height: 0;
+}
+
+table.grid {
+    border-collapse: collapse;
+    width: max-content;
+    min-width: 100%;
+    font-size: 12px;
+}
+
+table.grid th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--blue-soft);
+    color: var(--text);
+    font-weight: 600;
+    text-align: left;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-strong);
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+table.grid th.editable-head { background: var(--green-soft); }
+
+table.grid td {
+    padding: 3px 8px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+table.grid tbody tr:hover { background: #F2F8FD; }
+table.grid tbody tr.selected { background: var(--green-soft); }
+
+.cell-editor {
+    font: 12px "Segoe UI", Arial, sans-serif;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 3px;
+    background: #fff;
+    max-width: 190px;
+}
+
+.cell-editor:focus { border-color: var(--green); outline: none; }
+
+.empty {
+    padding: 22px;
+    color: var(--dim);
+    text-align: center;
+}
+
+/* --- модальное окно ------------------------------------------------------- */
+
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(27, 42, 56, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+}
+
+.sheet {
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 18px 22px;
+    width: min(880px, 94vw);
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 18px 50px rgba(27, 42, 56, 0.25);
+}
+
+.sheet h2 { margin: 0 0 12px; font-size: 17px; color: var(--blue); }
+.sheet h4 { margin: 14px 0 6px; font-size: 12px; color: var(--dim);
+            text-transform: uppercase; letter-spacing: 0.05em; }
+
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 30px; }
+.sheet .field { margin-bottom: 7px; }
+.sheet-buttons { margin-top: 16px; text-align: right; }
+
+#zoneConditions table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#zoneConditions th { text-align: left; color: var(--dim); font-weight: 600; padding: 3px 5px; }
+#zoneConditions td { padding: 2px 5px; }
+#zoneConditions input { width: 72px; padding: 2px 4px; border: 1px solid var(--border-strong);
+                        border-radius: 3px; font: inherit; }
+
+@media (max-width: 1100px) {
+    .columns { grid-template-columns: 1fr; }
+    .panel.left { width: 200px; }
+    .panel.right { width: 220px; }
+}
+
+/* Пункт списка, пришедший из модели, а не из каталога: его значения точнее
+   каталожных, и подменять их не следует без нужды. */
+.cell-editor option.from-model {
+    color: var(--green);
+    font-style: italic;
+}
+
+/* Отмена и возврат стоят рядом с «Расчётом»: ими пользуются постоянно. */
+.history { display: flex; gap: 2px; }
+
+.history button {
+    padding: 5px 9px;
+    color: var(--dim);
+}
+
+.history button:disabled {
+    color: #B6C6D4;
+    border-color: var(--border);
+    cursor: default;
+}
+
+.history button:disabled:hover { border-color: var(--border); color: #B6C6D4; }
+
+/* Строка, где типоразмер клапана задан человеком, а не подобран.
+   В таблице на два десятка столбцов иначе не отличить,
+   где числа подобраны, а где приняты. */
+table.grid tbody tr.by-hand { background: #DBE7F3; }
+table.grid tbody tr.by-hand:hover { background: #CFDFEE; }
+table.grid tbody tr.by-hand.selected { background: #C8E3D6; }
+table.grid tbody tr.by-hand td:first-child { box-shadow: inset 3px 0 0 var(--blue); }
+
+/* Окно свойств систем уже, чем исходные данные: полей немного,
+   и растягивать его на всю ширину незачем. */
+.sheet.narrow { width: min(460px, 94vw); }
+.sheet.narrow .field { margin-bottom: 8px; }
+
+/* Поле расхода на ИТП в панели таблиц: число короткое, поле тоже. */
+#proofWrap input { width: 92px; }
+
+/* Записка — главный результат работы, и кнопка у неё заметная:
+   зелёным, чтобы отличалась от синего «Расчёта» и не путалась с ним. */
+button.accent {
+    border-color: var(--green);
+    color: var(--green);
+    font-weight: 600;
+}
+
+button.accent:hover {
+    background: var(--green-soft);
+    border-color: var(--green);
+    color: var(--green);
+}
+
+/* Поле настроечного положения в проверочном расчёте. Узкое: на шкале
+   не больше трёх знаков, а место в таблице на восемнадцать столбцов дорого. */
+input.cell-editor.position {
+    width: 62px;
+    padding: 2px 4px;
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    font: inherit;
+    text-align: right;
+}
+
+input.cell-editor.position:focus {
+    outline: none;
+    border-color: var(--blue);
+}
+
+/* Список рекомендуемых диаметров. Таблица в окне, а не в доке:
+   решение принимается до применения, а не после. */
+.sizes { max-height: 56vh; overflow: auto; margin-top: 6px; }
+.sizes table { width: 100%; border-collapse: collapse; font-size: 12px; }
+
+.sizes th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: 600;
+    padding: 4px 6px;
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+}
+
+.sizes td { padding: 3px 6px; border-bottom: 1px solid var(--border); }
+.sizes tr:hover td { background: var(--blue-soft); }
+.sizes td.warn { color: var(--orange); }
+.sizes input[type=checkbox] { cursor: pointer; }
+
+/* Кнопки «отметить все» уходят влево, «Применить» остаётся справа. */
+.sheet-buttons { display: flex; align-items: center; gap: 6px; }
+.sheet-buttons .spacer { flex: 1; }

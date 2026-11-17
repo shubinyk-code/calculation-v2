@@ -1,0 +1,2970 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>АУПТ · Самопроверка расчёта</title>
+<style>
+    body { font: 13px/1.45 "Segoe UI", Arial, sans-serif; color: #1B2A38; background: #F5F9FD; margin: 0; padding: 18px 24px; }
+    h1 { font-size: 18px; color: #1D6FB8; margin: 0 0 6px; }
+    p { max-width: 900px; color: #5B7186; }
+    table { border-collapse: collapse; background: #fff; min-width: 900px; }
+    td { border-bottom: 1px solid #DCE7F2; padding: 3px 8px; font-variant-numeric: tabular-nums; }
+    tr.section td { background: #EAF3FB; font-weight: 600; padding-top: 8px; }
+    .ok { color: #17916B; }
+    .bad { color: #D2413A; font-weight: 600; }
+    #summary { font-size: 15px; font-weight: 600; padding: 10px 14px; border-radius: 5px; margin: 10px 0; max-width: 900px; }
+    #summary.ok { background: #E4F5EE; color: #0F6B4F; }
+    #summary.bad { background: #FBE9E8; color: #96241E; }
+</style>
+</head>
+<body>
+
+<h1>Самопроверка расчёта АУПТ</h1>
+<p>
+    Эталон — калькулятор «Приложение 6 — АПТ паркинг 1 этаж», лист «Расчет»:
+    диктующий луч 1-2…4-5, его отражённый аналог, лучи а-д, е-и, к, м в узле 5,
+    пожарный кран 5,2 л/с, полукольцо 5-6 и магистраль до ввода. Ожидаемые
+    числа — значения ячеек Excel с полной точностью, а не округлённые.
+</p>
+<p>Библиотека объектов и ревизий проверяется отдельно: <a href="tests-library.html">tests-library.html</a>.</p>
+<div id="summary"></div>
+<table><tbody id="results"></tbody></table>
+
+<script src="js/format.js"></script>
+<script src="js/catalog.js"></script>
+<script src="js/sprinklers.js"></script>
+<script src="js/corridor.js"></script>
+<script src="js/model.js"></script>
+<script src="js/binding.js"></script>
+<script src="js/solver.js"></script>
+<script src="js/diaphragm.js"></script>
+<script src="js/vpv.js"></script>
+<script src="js/floors.js"></script>
+<script src="js/stations.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/excel.js"></script>
+<script src="js/report.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/systems.js"></script>
+<script src="js/vpv-ui.js"></script>
+<script src="js/tch.js"></script>
+<script src="js/appendix.js"></script>
+<script src="js/tch-text.js"></script>
+<script src="js/pdf.js"></script>
+<script src="js/pdf-write.js"></script>
+<script src="js/pumps.js"></script>
+<script src="js/pump-window.js"></script>
+<script src="js/docx.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/canon.js"></script>
+<script src="js/dxf-write.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/request.js"></script>
+<script src="js/task.js"></script>
+<script src="js/task-blank.js"></script>
+<script src="js/task-form.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var body = document.getElementById('results');
+    var passed = 0;
+    var failed = 0;
+
+    function section(title) {
+        body.insertAdjacentHTML('beforeend', '<tr class="section"><td colspan="4">' + Fmt.html(title) + '</td></tr>');
+    }
+
+    function report(name, ok, actual, expected) {
+        if (ok) passed++; else failed++;
+        body.insertAdjacentHTML('beforeend', '<tr><td>' + Fmt.html(name) + '</td><td>' + Fmt.html(actual)
+            + '</td><td>' + Fmt.html(expected) + '</td><td class="' + (ok ? 'ok">да' : 'bad">НЕТ') + '</td></tr>');
+    }
+
+    function near(name, actual, expected, tol) {
+        var t = tol === undefined ? 1e-9 : tol;
+        var ok = typeof actual === 'number' && Math.abs(actual - expected) <= t * Math.max(1, Math.abs(expected));
+        report(name, ok, actual, expected);
+    }
+
+    function same(name, actual, expected) {
+        report(name, actual === expected, actual, expected);
+    }
+
+    function guard(name, fn) {
+        try { fn(); } catch (e) { report(name + ': исключение', false, e.message, '—'); console.error(e); }
+    }
+
+    var P3262 = { material: 'ГОСТ3262' };
+
+    function pipe(material, od, wall) {
+        return { material: material, od: od, wall: wall };
+    }
+
+    /* Цепочка оросителей от точки (x, y) по направлению (dx, dy); последний узел — at. */
+    function chain(p, at, x, y, dx, dy, specs) {
+        // specs: [{ L, pipe, spr }] от дальнего конца к узлу присоединения
+        var ids = [];
+        var cx = x;
+        var cy = y;
+        for (var i = 0; i < specs.length; i++) {
+            ids.push(Model.addNode(p, cx, cy, { spr: true }).id);
+            cx += dx * specs[i].L;
+            cy += dy * specs[i].L;
+        }
+        ids.push(at);
+        for (i = 0; i < specs.length; i++) {
+            var props = pipe(specs[i].pipe[0], specs[i].pipe[1], specs[i].pipe[2]);
+            props.role = 'ray';
+            props.len = specs[i].L;
+            Model.addSegment(p, ids[i], ids[i + 1], props);
+        }
+        return ids;
+    }
+
+    function excelExample() {
+        var p = Model.create();
+        var s = p.settings;
+        s.dictHead = 18;
+        s.k = 0.47;
+        s.sprinklerElev = -0.2;
+        s.inletElev = -3.6;
+        s.cuKind = 'Прямоточный';
+        s.cuDn = 150;
+        s.cuXi = 3.858e-8;
+        s.guaranteed = 26;
+        s.pumpLoss = 3;
+        s.suction = 0;
+        s.localFactor = 1.2;
+
+        // Узел 5 и магистраль до ввода: 5-6 полукольцо, 6-7, 7-8.
+        var n5 = Model.addNode(p, 20, 0, { q: 5.2 });
+        var n6 = Model.addNode(p, 20, -10);
+        var n7 = Model.addNode(p, 20, -20);
+        var n8 = Model.addNode(p, 20, -30, { src: true });
+        Model.addSegment(p, n5.id, n6.id, { role: 'main', material: 'ГОСТ10704', od: 133, wall: 4, len: 135, ring: true });
+        Model.addSegment(p, n6.id, n7.id, { role: 'main', material: 'ГОСТ10704', od: 159, wall: 4, len: 25 });
+        Model.addSegment(p, n7.id, n8.id, { role: 'main', material: 'ГОСТ10704', od: 219, wall: 4.5, len: 113 });
+
+        var ray = ['ГОСТ3262', 48, 3];
+        var r57 = ['ГОСТ10704', 57, 3];
+        var r42 = ['ГОСТ3262', 42.3, 2.8];
+
+        // Диктующий луч 1-2-3-4-5, начерчен первым.
+        var dictating = chain(p, n5.id, 10, 0, 1, 0, [
+            { L: 3.2, pipe: ray }, { L: 3.2, pipe: ray }, { L: 3.2, pipe: ray }, { L: 2.6, pipe: r57 }
+        ]);
+
+        // Отражённый аналог диктующего (E6·2 в формуле Excel).
+        chain(p, n5.id, 30, 0, -1, 0, [
+            { L: 3.2, pipe: ray }, { L: 3.2, pipe: ray }, { L: 3.2, pipe: ray }, { L: 2.6, pipe: r57 }
+        ]);
+
+        // Луч а-д.
+        chain(p, n5.id, 20, 12, 0, -1, [
+            { L: 3.2, pipe: ray }, { L: 3.2, pipe: ray }, { L: 2.9, pipe: ray }, { L: 0.6, pipe: r57 }
+        ]);
+
+        // Луч е-и.
+        chain(p, n5.id, 16, 8, 0.5, -1, [
+            { L: 3.2, pipe: ray }, { L: 3.2, pipe: ray }, { L: 3.52, pipe: ray }
+        ]);
+
+        // Лучи к-л и м-н из одного оросителя.
+        chain(p, n5.id, 24, 5, 0, -1, [{ L: 2.59, pipe: r42 }]);
+        chain(p, n5.id, 22, 3, 0, -1, [{ L: 0.6, pipe: r42 }]);
+
+        return { p: p, n5: n5.id, n6: n6.id, n7: n7.id, n8: n8.id, dict: dictating[0], dictRay: dictating };
+    }
+
+    /* ------------------------------------------------------------------ */
+
+    guard('Справочник', function () {
+        section('Справочник труб и формулы');
+        near('Kт 48×3 ГОСТ 3262', Catalog.pipe({ material: 'ГОСТ3262', od: 48, wall: 3 }).kt, 34.5);
+        near('Kт 159×4 как в Excel', Catalog.pipe({ material: 'ГОСТ10704', od: 159, wall: 4 }).kt, 34879.39);
+        near('Формула Kт для 57×3 (Доп. данные!F2)', Catalog.ktFormula(51), 99.52635143212288, 1e-12);
+        same('Размер вне таблицы идёт по формуле', Catalog.pipe({ material: 'ГОСТ10704', od: 60, wall: 3 }).source, 'formula');
+        near('Скорость 1-2 (Расчет!J3)', Solver.velocity(1.9940411229460637, 42), 1.4392811856933325);
+        near('ξ прямоточного Ду150', Catalog.cuXi('Прямоточный', 150), 3.858e-8);
+
+        section('Справочник оросителей');
+        near('Спецавтоматика СВН-12', Sprinklers.find('Спецавтоматика', 'СВН-12').k, 0.47);
+        near('Спецавтоматика СВН-15', Sprinklers.find('Спецавтоматика', 'СВН-15').k, 0.77);
+        near('Спецавтоматика СОБР-25-Н', Sprinklers.find('Спецавтоматика', 'СОБР-25-Н').k, 1.91);
+        near('Dinarm СТАНДАРТ-К80Н', Sprinklers.find('Dinarm (Огнеборец)', 'СТАНДАРТ-К80Н').k, 0.42);
+        same('марка по ключу «производитель|марка»', Sprinklers.findKey('Спецавтоматика|СВУ-К57М').k, 0.3);
+        same('у Аква-Гефест есть оросители', Sprinklers.maker('Аква-Гефест').items.length > 0, true);
+        var bad = [];
+        Sprinklers.MAKERS.forEach(function (m) {
+            var seen = {};
+            m.items.forEach(function (it) {
+                if (!(it.k > 0 && it.k < 3)) bad.push(m.name + ' ' + it.model + ': k ' + it.k);
+                if (seen[it.model]) bad.push(m.name + ' ' + it.model + ': повтор');
+                seen[it.model] = true;
+            });
+        });
+        same('все k в пределах 0…3 и марки без повторов', bad.join('; '), '');
+        same('Fmt.num', Fmt.num(18.3688, 2), '18,37');
+        same('Fmt.parse с запятой', Fmt.parse(' 3,2 '), 3.2);
+        same('Fmt.parse пустого', Fmt.parse(''), null);
+    });
+
+    guard('Пример Excel', function () {
+        var ex = excelExample();
+        var net = Solver.solve(ex.p);
+        var calc = Calc.build(ex.p, net);
+
+        section('Решатель против листа «Расчет»');
+        same('расчёт выполнен', net.ok, true);
+        same('ошибок нет', net.errors.join('; '), '');
+        same('диктующий — ороситель 1', net.dict, ex.dict);
+
+        var N = net.N;
+        var ids = ex.dictRay;
+
+        near('H 1 (B3)', N[ids[0]].H, 18);
+        near('H 2 (B4)', N[ids[1]].H, 18.368806956521738);
+        near('H 3 (B5)', N[ids[2]].H, 19.859109641470127);
+        near('H 4 (B6)', N[ids[3]].H, 23.313747862541462);
+        near('Q 4-5 (E6)', net.S[N[ids[3]].pseg].Q, 8.372256922179);
+        near('H 5 (B7)', N[ex.n5].H, 25.144815716701341);
+        near('Q 5-6 полукольцо (E7)', net.S[N[ex.n5].pseg].Q, 20.780417356556399);
+        near('ΔH 5-6 (L7)', net.S[N[ex.n5].pseg].dH, 4.6129096198202921);
+        near('H 6 (B8)', N[ex.n6].H, 29.757725336521634);
+        near('Q 6-7 (E8)', net.S[N[ex.n6].pseg].Q, 41.560834713112797);
+        near('H 7 (B9)', N[ex.n7].H, 30.995779515544463);
+        near('H ввод (B10)', N[ex.n8].H, 31.949869677391447);
+        near('Нсети без местных (L17)', net.HnetRaw, 13.949869677391447);
+        near('Q итого (E17)', net.Qtotal, 41.560834713112797);
+
+        section('Лучи в режиме «как в СП» против Excel');
+        var summaries = calc.rows.filter(function (r) { return r.type === 'summary'; });
+        function summaryWith(Hk) {
+            for (var i = 0; i < summaries.length; i++) {
+                if (Math.abs(summaries[i].Hk - Hk) < 1e-6) return summaries[i];
+            }
+            return null;
+        }
+
+        var ad = summaryWith(23.410834463950771);
+        same('луч а-д найден по Hк (B24)', !!ad, true);
+        if (ad) {
+            near('Q а-д к узлу 5 (E24)', ad.Q, 8.6603815102758688);
+            near('Hуз луча а-д = B7', ad.Hnode, 25.144815716701341);
+        }
+        var ei = summaryWith(23.659211684648593);
+        same('луч е-и найден по Hк (B29)', !!ei, true);
+        if (ei) near('Q е-и к узлу 5 (E29)', ei.Q, 6.2915831220519145);
+        var kl = summaryWith(18.62414290909091);
+        same('луч к-л найден (B34)', !!kl, true);
+        if (kl) near('Q к-л (E34)', kl.Q, 2.3169688299666689);
+        var mn = summaryWith(18.14458909090909);
+        same('луч м-н найден (B38)', !!mn, true);
+        if (mn) near('Q м-н (E38)', mn.Q, 2.3473874064603448);
+
+        var gd = calc.rows.filter(function (r) { return r.type === 'seg' && Math.abs(r.H - 22.989875529316024) < 1e-9; });
+        same('строка г-д (B23) есть', gd.length, 1);
+        if (gd.length) near('Q г-д (E23)', gd[0].Q, 8.3564389110230834);
+
+        var analogs = calc.groups.filter(function (g) { return g.analogOf; });
+        same('отражённый диктующий луч опознан аналогом', analogs.length, 1);
+
+        section('Лист «Вывод данных»');
+        var h = calc.head;
+        near('Нгеом (Q14)', h.Hgeom, 3.4);
+        near('Нсети ×1,2 (V19)', h.Hnet, 16.739843612869738);
+        near('Нуу (V21)', h.Hcu, 0.86364596365579838);
+        near('Нтр (AA26)', h.Hreq, 42.003489576525531);
+        near('Ннас.треб (W28)', h.HpumpReq, 16.003489576525531);
+        near('f (Исходные данные!C25)', calc.checks.f, 0.61623603739151045);
+
+        section('Режим «фактические напоры»');
+        ex.p.settings.tableMode = 'actual';
+        var actual = Calc.build(ex.p, net);
+        var adActual = actual.rows.filter(function (r) {
+            return r.type === 'summary' && Math.abs(r.Q - 8.6603815102758688) < 1e-9;
+        });
+        same('расход луча а-д в узле тот же', adActual.length, 1);
+        if (adActual.length) near('Hк = Hуз в фактическом режиме', adActual[0].Hk, adActual[0].Hnode);
+
+        section('Нумерация');
+        ex.p.settings.tableMode = 'sp';
+        var main = calc.groups[0];
+        same('диктующий ороситель — «1»', main.labels[ex.dict], '1');
+        same('ввод подписан «ввод»', main.labels[ex.n8], 'ввод');
+        same('первый луч начинается с «а»', calc.groups[1].labels[calc.groups[1].path[0]], 'а');
+
+        ex.p.settings.num.branchStyle = 'digits-suffix';
+        var suffixed = Calc.build(ex.p, net);
+        same('стиль 1а/2а: первый луч', suffixed.groups[1].labels[suffixed.groups[1].path[0]], '1а');
+        same('стиль 1а/2а: второй луч', suffixed.groups[2].labels[suffixed.groups[2].path[0]], '1б');
+
+        ex.p.settings.num.branchStyle = 'dotted';
+        ex.p.settings.num.attach = 'main';
+        var dotted = Calc.build(ex.p, net);
+        var g2 = dotted.groups[2];
+        same('стиль 1.1: второй луч', g2.labels[g2.path[0]], '2.1');
+        same('узел присоединения подписан по магистрали', g2.labels[g2.attach], dotted.groups[0].labels[g2.attach]);
+
+        same('буквы после «я»', Calc.alphabet(28), 'аа');
+    });
+
+    guard('Правка', function () {
+        section('Правка сети');
+        var p = Model.create();
+        var a = Model.addNode(p, 0, 0, { src: true });
+        var b = Model.addNode(p, 10, 0);
+        var main = Model.addSegment(p, a.id, b.id, { role: 'main' });
+
+        var t = Model.splitSegment(p, main, 4, 0.3);
+        same('разбиение: три узла', p.nodes.length, 3);
+        near('разбиение: узел на оси', t.y, 0);
+        near('разбиение: длины сложились', Model.length(p, Model.seg(p, main.id)) + 6, 10);
+
+        var s1 = Model.addNode(p, 4, 3.2, { spr: true });
+        var s2 = Model.addNode(p, 4, 6.4, { spr: true });
+        Model.addSegment(p, t.id, s1.id, { role: 'ray' });
+        var last = Model.addSegment(p, s1.id, s2.id, { role: 'ray' });
+
+        var br = Model.branchOf(p, last.id);
+        same('луч: два узла', br.nodes.length, 2);
+        same('луч: присоединение к магистрали', br.attach, t.id);
+
+        Model.mirrorBranch(p, br);
+        near('отражение через магистраль', Model.node(p, s2.id).y, -6.4);
+
+        var target = Model.nearestMain(p, 7.2, 0.02, 0.1);
+        same('точка на магистрали найдена', !!target, true);
+        var clone = Model.cloneBranch(p, br, target, true);
+        same('аналог создан', !clone.error, true);
+        near('аналог отражён обратно', Model.node(p, clone.map[s2.id]).y, 6.4);
+        near('аналог сдвинут вдоль магистрали', Model.node(p, clone.map[s2.id]).x, 7.2);
+
+        var before = p.segments.length;
+        Model.moveBranch(p, Model.branchOf(p, last.id), Model.nearestMain(p, 1, 0, 0.1), false);
+        same('перенос: пустой узел магистрали склеен', p.segments.length, before);
+
+        var net = Solver.solve(p);
+        same('после правок сеть считается', net.ok, true);
+        var calc = Calc.build(p, net);
+        same('две группы: ветвь и луч', calc.groups.length, 2);
+    });
+
+    guard('Кран', function () {
+        section('Постоянный расход и назначенный диктующий');
+        var p = Model.create();
+        var src = Model.addNode(p, 0, 0, { src: true });
+        var mid = Model.addNode(p, 5, 0, { q: 3 });
+        var s1 = Model.addNode(p, 8, 0, { spr: true });
+        Model.addSegment(p, src.id, mid.id, { role: 'main', material: 'ГОСТ3262', od: 48, wall: 3 });
+        Model.addSegment(p, mid.id, s1.id, { role: 'ray', material: 'ГОСТ3262', od: 48, wall: 3 });
+
+        var net = Solver.solve(p);
+        var q = 0.47 * Math.sqrt(18);
+        var h5 = 18 + q * q * 3 / 34.5;
+        var h0 = h5 + (q + 3) * (q + 3) * 5 / 34.5;
+        near('напор в узле крана', net.N[mid.id].H, h5, 1e-9);
+        near('напор на вводе с краном', net.N[src.id].H, h0, 1e-9);
+        near('расход на вводе', net.Qtotal, q + 3, 1e-9);
+    });
+
+    guard('ПК', function () {
+        section('Пожарный кран в расчётной сети и воздухозаполненная система');
+
+        // Ввод —5 м— развилка J —3 м— ороситель; J —2 м— ПК (2 × 3,5 л/с, 30 м у клапана,
+        // клапан на 1,5 м ниже оросителей). Все трубы 48×3, Kт = 34,5.
+        var p = Model.create();
+        var pipe = { material: 'ГОСТ3262', od: 48, wall: 3 };
+        function props(role, len) {
+            return { role: role, material: pipe.material, od: pipe.od, wall: pipe.wall, len: len };
+        }
+        var src = Model.addNode(p, 0, 0, { src: true });
+        var J = Model.addNode(p, 5, 0);
+        var S = Model.addNode(p, 8, 0, { spr: true });
+        var P = Model.addNode(p, 5, 2, { pk: { jets: 2, flow: 3.5, head: 30, elev: -1.7, name: '' } });
+        Model.addSegment(p, src.id, J.id, props('main', 5));
+        Model.addSegment(p, J.id, S.id, props('ray', 3));
+        Model.addSegment(p, J.id, P.id, props('ray', 2));
+
+        var net = Solver.solve(p);
+        var calc = Calc.build(p, net);
+
+        var need = 30 - (-0.2 - (-1.7));
+        var hJ = need + 7 * 7 * 2 / 34.5;
+        var hS = hJ / (1 + 0.47 * 0.47 * 3 / 34.5);
+        var qS = 0.47 * Math.sqrt(hS);
+        var hSrc = hJ + (7 + qS) * (7 + qS) * 5 / 34.5;
+
+        same('диктует пожарный кран', net.dict, P.id);
+        same('обозначение по порядку', calc.hydrants[0].name, 'ПК-1');
+        near('напор узла ПК с поправкой на отметку клапана', net.N[P.id].H, need);
+        near('давление у клапана = требуемому', calc.hydrants[0].valve, 30);
+        near('напор на вводе', net.Hsource, hSrc);
+        near('расход на вводе = ороситель + 7 л/с', net.Qtotal, qS + 7);
+        near('Нсв = напор диктующего ПК', calc.head.Hfree, need);
+        same('ороситель получает больше 18 м', net.N[S.id].H > 18, true);
+        same('замечание про DN 65', calc.warnings.some(function (w) { return w.indexOf('DN 65') >= 0; }), true);
+
+        p.settings.systemKind = 'воздухозаполненная';
+        p.settings.coldRoom = true;
+        var air = Calc.build(p, net);
+        near('объём воздухозаполненных трубопроводов, м³', air.air.volume, Math.PI * 0.042 * 0.042 / 4 * 10);
+        same('замечание про воздушный узел управления', air.warnings.some(function (w) { return w.indexOf('воздушный') >= 0; }), true);
+        same('замечание п. 6.2.19 для СВН-12', air.warnings.some(function (w) { return w.indexOf('6.2.19') >= 0; }), true);
+        same('замечание п. 6.7.1.45 про ПК', air.warnings.some(function (w) { return w.indexOf('6.7.1.45') >= 0; }), true);
+    });
+
+    guard('Привязка', function () {
+        section('Привязка: размеры и сдвиг');
+
+        // Магистраль 12 м от ввода, лучи в 4 и 8 м, по три оросителя через 3,2 м.
+        var p = Model.create();
+        var src = Model.addNode(p, 0, 0, { src: true });
+        var end = Model.addNode(p, 12, 0);
+        var main = Model.addSegment(p, src.id, end.id, { role: 'main' });
+        var A1 = Model.splitSegment(p, main, 4, 0);
+        var rest = Model.between(p, A1.id, end.id);
+        var A2 = Model.splitSegment(p, rest, 8, 0);
+
+        function ray(att) {
+            var ids = [att.id];
+            for (var i = 1; i <= 3; i++) {
+                var n = Model.addNode(p, att.x, 3.2 * i, { spr: true });
+                Model.addSegment(p, ids[ids.length - 1], n.id, { role: 'ray' });
+                ids.push(n.id);
+            }
+            return ids;
+        }
+
+        function seg(a, b) { return Model.between(p, a, b); }
+
+        var r1 = ray(A1);
+        var r2 = ray(A2);
+
+        var res = Binding.moveEnd(p, seg(r1[0], r1[1]).id, r1[1], 2, true);
+        same('первый участок луча: без ошибки', !res.error, true);
+        near('первый ороситель на 2 м от магистрали', Model.node(p, r1[1]).y, 2);
+        near('дальние оросители сдвинулись цепочкой', Model.node(p, r1[3]).y, 8.4);
+        near('шаг дальше не изменился', Model.geomLength(p, seg(r1[1], r1[2])), 3.2);
+
+        Binding.moveEnd(p, seg(r1[1], r1[2]).id, r1[2], 3, false);
+        near('без цепочки последний ороситель стоит', Model.node(p, r1[3]).y, 8.4);
+        near('соседний шаг поменялся', Model.geomLength(p, seg(r1[2], r1[3])), 3.4);
+
+        Binding.setRayStep(p, Model.branchOf(p, seg(r1[0], r1[1]).id), 2.5);
+        near('шаг всем: последний участок', Model.geomLength(p, seg(r1[2], r1[3])), 2.5);
+        near('шаг всем: участок от магистрали не тронут', Model.geomLength(p, seg(r1[0], r1[1])), 2);
+
+        var m = Binding.moveEnd(p, seg(src.id, A1.id).id, A1.id, 3, true);
+        same('магистраль цепочкой: без ошибки', !m.error, true);
+        near('луч 1 в 3 м от ввода', Model.node(p, A1.id).x, 3);
+        near('луч 2 уехал следом', Model.node(p, A2.id).x, 7);
+        near('оросители луча 2 вместе с ним', Model.node(p, r2[3]).x, 7);
+
+        var ax = Binding.mainAxis(p, A2.id);
+        var sign = ax.x > 0 ? 1 : -1;
+        var along = Binding.moveBranchAlong(p, Model.branchOf(p, seg(r2[0], r2[1]).id), 'main', sign);
+        same('луч вдоль магистрали: без ошибки', !along.error, true);
+        near('луч 2 на 1 м дальше', Model.node(p, A2.id).x, 8);
+        near('расстояние между лучами 5 м', Model.geomLength(p, seg(A1.id, A2.id)), 5);
+
+        var over = Binding.moveBranchAlong(p, Model.branchOf(p, seg(r2[0], r2[1]).id), 'main', sign * 10);
+        same('сдвиг за конец магистрали отклонён', !!over.error, true);
+        near('после отказа луч на месте', Model.node(p, A2.id).x, 8);
+
+        Binding.moveBranchAlong(p, Model.branchOf(p, seg(r2[0], r2[1]).id), 'ray', 1);
+        near('луч вдоль себя: участок от магистрали 4,2 м', Model.geomLength(p, seg(r2[0], r2[1])), 4.2);
+        near('луч вдоль себя: шаг сохранён', Model.geomLength(p, seg(r2[1], r2[2])), 3.2);
+
+        same('после привязок сеть считается', Solver.solve(p).ok, true);
+    });
+
+    /*
+        Маленький вычислитель формул выгрузки: + − * / ^, унарный минус, скобки,
+        ссылки с листом и без, диапазоны столбцов, SQRT, PI, SUM, SUMIFS. Нужен,
+        чтобы проверить не «в ячейке что-то написано», а что формулы Excel
+        дают те же числа, что программа.
+    */
+    function Book(sheets) {
+        var map = {};
+        sheets.forEach(function (sh) { map[sh.name] = sh.grid; });
+        this.map = map;
+        this.cache = {};
+    }
+
+    function colNum(letters) {
+        var n = 0;
+        for (var i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+        return n - 1;
+    }
+
+    Book.prototype.raw = function (sheet, col, row) {
+        var grid = this.map[sheet];
+        if (!grid) throw new Error('нет листа ' + sheet);
+        var line = grid[row - 1];
+        return line ? line[col] : undefined;
+    };
+
+    Book.prototype.value = function (sheet, col, row) {
+        var key = sheet + '!' + col + ':' + row;
+        if (key in this.cache) return this.cache[key];
+
+        var c = this.raw(sheet, col, row);
+        var v;
+        if (c === undefined || c === null) v = 0;
+        else if (typeof c !== 'object') v = c;
+        else if (c.f) v = this.formula(sheet, c.f);
+        else v = c.v === '' || c.v === undefined ? 0 : c.v;
+
+        this.cache[key] = v;
+        return v;
+    };
+
+    Book.prototype.formula = function (sheet, text) {
+        var book = this;
+        var pos = 0;
+
+        function peek(re) {
+            var m = re.exec(text.substring(pos));
+            return m;
+        }
+
+        function take(re) {
+            var m = peek(re);
+            if (m) pos += m[0].length;
+            return m;
+        }
+
+        function range(sh, c1, r1, c2, r2) {
+            return { range: true, sheet: sh, c1: colNum(c1), r1: r1 ? +r1 : null, c2: colNum(c2 || c1), r2: r2 ? +r2 : (r1 ? +r1 : null) };
+        }
+
+        function cells(rg) {
+            var out = [];
+            var grid = book.map[rg.sheet];
+            var from = rg.r1 || 1;
+            var to = rg.r2 || grid.length;
+            for (var r = from; r <= to; r++) {
+                for (var c = rg.c1; c <= rg.c2; c++) out.push({ c: c, r: r });
+            }
+            return out;
+        }
+
+        function scalar(x) {
+            if (x && x.range) {
+                if (x.r1 === null) throw new Error('столбец вместо числа');
+                return book.value(x.sheet, x.c1, x.r1);
+            }
+            return x;
+        }
+
+        function primary() {
+            var m;
+            if ((m = take(/^(\d+(\.\d+)?([eE][-+]?\d+)?)/))) return parseFloat(m[1]);
+            if ((m = take(/^"((?:[^"]|"")*)"/))) return m[1].replace(/""/g, '"');
+            if (take(/^\(/)) {
+                var inner = compare();
+                take(/^\)/);
+                return inner;
+            }
+            if ((m = take(/^([A-Z][A-Z0-9]*)\(/))) {
+                var name = m[1];
+                var args = [];
+                if (!take(/^\)/)) {
+                    do { args.push(compare()); } while (take(/^,/));
+                    take(/^\)/);
+                }
+                return call(name, args);
+            }
+            var sh = sheet;
+            if ((m = take(/^'([^']+)'!/))) sh = m[1];
+            if ((m = take(/^\$?([A-Z]+)\$?(\d*)(:\$?([A-Z]+)\$?(\d*))?/))) {
+                return range(sh, m[1], m[2], m[4], m[5]);
+            }
+            throw new Error('не разобрать «' + text.substring(pos) + '» в ' + text);
+        }
+
+        function call(name, args) {
+            if (name === 'PI') return Math.PI;
+            if (name === 'SQRT') return Math.sqrt(scalar(args[0]));
+            if (name === 'LOG10') return Math.log10(scalar(args[0]));
+            if (name === 'IF') return scalar(args[0]) ? scalar(args[1]) : scalar(args[2]);
+            if (name === 'SUM') {
+                var total = 0;
+                args.forEach(function (a) {
+                    if (a && a.range) cells(a).forEach(function (x) { var v = book.value(a.sheet, x.c, x.r); if (typeof v === 'number') total += v; });
+                    else total += a;
+                });
+                return total;
+            }
+            if (name === 'SUMIF') {
+                // Как в Excel: текст сравнивается без учёта регистра.
+                var keys = cells(args[0]);
+                var sums = cells(args[2]);
+                var want = String(scalar(args[1])).toLowerCase();
+                var acc = 0;
+                keys.forEach(function (x, idx) {
+                    if (String(book.value(args[0].sheet, x.c, x.r)).toLowerCase() !== want) return;
+                    var v = book.value(args[2].sheet, sums[idx].c, sums[idx].r);
+                    if (typeof v === 'number') acc += v;
+                });
+                return acc;
+            }
+            if (name === 'SUMIFS') {
+                var sumRange = args[0];
+                var sumCells = cells(sumRange);
+                var result = 0;
+                sumCells.forEach(function (x, idx) {
+                    for (var k = 1; k < args.length; k += 2) {
+                        var crit = scalar(args[k + 1]);
+                        var rg = args[k];
+                        var cc = cells(rg)[idx];
+                        if (book.value(rg.sheet, cc.c, cc.r) !== crit) return;
+                    }
+                    var v = book.value(sumRange.sheet, x.c, x.r);
+                    if (typeof v === 'number') result += v;
+                });
+                return result;
+            }
+            throw new Error('функция ' + name);
+        }
+
+        function unary() {
+            if (take(/^-/)) return -scalar(unary());
+            return primary();
+        }
+
+        // Диапазон остаётся диапазоном, пока рядом нет оператора: его ждут
+        // SUM и SUMIFS. В число он превращается только для арифметики.
+        function power() {
+            var left = unary();
+            while (take(/^\^/)) left = Math.pow(scalar(left), scalar(unary()));
+            return left;
+        }
+
+        function term() {
+            var left = power();
+            var m;
+            while ((m = take(/^[*\/]/))) {
+                var right = scalar(power());
+                left = m[0] === '*' ? scalar(left) * right : scalar(left) / right;
+            }
+            return left;
+        }
+
+        function expr() {
+            var left = term();
+            var m;
+            while ((m = take(/^[+\-]/))) {
+                var right = scalar(term());
+                left = m[0] === '+' ? scalar(left) + right : scalar(left) - right;
+            }
+            return left;
+        }
+
+        function compare() {
+            var left = expr();
+            var m = take(/^(>=|<=|<>|>|<|=)/);
+            if (!m) return left;
+            var a = scalar(left);
+            var b = scalar(expr());
+            switch (m[1]) {
+                case '>=': return a >= b ? 1 : 0;
+                case '<=': return a <= b ? 1 : 0;
+                case '<>': return a !== b ? 1 : 0;
+                case '>': return a > b ? 1 : 0;
+                case '<': return a < b ? 1 : 0;
+                default: return a === b ? 1 : 0;
+            }
+        }
+
+        var result = scalar(compare());
+        if (pos !== text.length) throw new Error('хвост «' + text.substring(pos) + '» в ' + text);
+        return result;
+    };
+
+    /** Сверить все формулы книги с записанными значениями. */
+    function formulaMismatches(sheets) {
+        var book = new Book(sheets);
+        var bad = [];
+        var count = 0;
+
+        sheets.forEach(function (sh) {
+            sh.grid.forEach(function (line, r) {
+                (line || []).forEach(function (c, col) {
+                    if (!c || typeof c !== 'object' || !c.f) return;
+                    count++;
+                    var v;
+                    try {
+                        v = book.value(sh.name, col, r + 1);
+                    } catch (e) {
+                        bad.push(sh.name + '!' + Xlsx.column(col) + (r + 1) + ': ' + e.message);
+                        return;
+                    }
+                    if (typeof c.v === 'number' && Math.abs(v - c.v) > 1e-7 * Math.max(1, Math.abs(c.v))) {
+                        bad.push(sh.name + '!' + Xlsx.column(col) + (r + 1) + ' =' + c.f + ' → ' + v + ' вместо ' + c.v);
+                    }
+                });
+            });
+        });
+
+        return { count: count, bad: bad, book: book };
+    }
+
+    function findCell(sheet, predicate) {
+        for (var r = 0; r < sheet.grid.length; r++) {
+            var line = sheet.grid[r] || [];
+            for (var c = 0; c < line.length; c++) {
+                if (predicate(line[c], line)) return { c: c, r: r + 1 };
+            }
+        }
+        return null;
+    }
+
+    guard('Excel', function () {
+        section('Выгрузка в Excel формулами');
+
+        var ex = excelExample();
+        var net = Solver.solve(ex.p);
+        var app = { project: ex.p, net: net, calc: Calc.build(ex.p, net) };
+        var sheets = ExcelExport.sheets(app);
+        var check = formulaMismatches(sheets);
+
+        same('формул в книге больше сотни', check.count > 100, true);
+        same('каждая формула даёт число программы', check.bad.slice(0, 5).join(' | '), '');
+
+        var calcSheet = sheets.filter(function (s) { return s.name === 'Расчет'; })[0];
+        var outSheet = sheets.filter(function (s) { return s.name === 'Вывод данных'; })[0];
+        var total = findCell(calcSheet, function (c) { return c && c.v === 'Итого'; });
+        var req = findCell(outSheet, function (c) { return c && c.v === 'Нтр'; });
+
+        near('Расчет: H на вводе формулой (B10 в Excel)', check.book.value('Расчет', 1, total.r), 31.949869677391447);
+        near('Расчет: Q итого формулой (E17)', check.book.value('Расчет', 4, total.r), 41.560834713112797);
+        near('Вывод: Нтр формулой (AA26)', check.book.value('Вывод данных', 2, req.r), 42.003489576525531);
+
+        var firstB = calcSheet.grid[3][1];
+        same('первая строка ссылается на Hдикт', firstB.f, "'Исходные данные'!$B$8");
+        same('Kт берётся из листа «Трубы»', /^SUMIFS\('Трубы'!/.test(calcSheet.grid[3][2].f), true);
+        var ring = findCell(calcSheet, function (c) { return c && c.f && /\*0\.5$/.test(c.f); });
+        same('полукольцо — множитель 0,5 в формуле расхода', !!ring, true);
+        var summary = findCell(calcSheet, function (c) { return c && c.f && /SQRT\(B\d+\/B\d+\)/.test(c.f); });
+        same('строка приведения луча Qк·√(Hуз/Hк)', !!summary, true);
+
+        // Живые формулы: Hдикт 20 в книге = расчёт программы при Hдикт 20.
+        var input = sheets[0];
+        input.grid[ExcelExport.IN.H - 1][1] = { v: 20, s: 'input' };
+        var book20 = new Book(sheets);
+        ex.p.settings.dictHead = 20;
+        var net20 = Solver.solve(ex.p);
+        var calc20 = Calc.build(ex.p, net20);
+        near('Hдикт = 20 в книге: H на вводе как у программы', book20.value('Расчет', 1, total.r), net20.Hsource);
+        near('Hдикт = 20 в книге: Нтр как у программы', book20.value('Вывод данных', 2, req.r), calc20.head.Hreq);
+
+        var bytes = Xlsx.bytes(sheets);
+        same('файл .xlsx собирается', bytes.length > 10000, true);
+
+        // Строка про насосную установку — только когда она нужна.
+        ex.p.settings.guaranteed = 1;
+        ex.p.settings.pumpText = 'CO-2 Helix V 1605/K/CC';
+        function pumpNote(p) {
+            var n = Solver.solve(p);
+            var out = ExcelExport.sheets({ project: p, net: n, calc: Calc.build(p, n) })
+                .filter(function (s) { return s.name === 'Вывод данных'; })[0];
+            var cell = findCell(out, function (c) { return c && typeof c.v === 'string' && /насосная установка/i.test(c.v); });
+            return cell ? out.grid[cell.r - 1][cell.c].v : '';
+        }
+        same('насос нужен — в листе марка установки', /обеспечивает насосная установка: CO-2 Helix/.test(pumpNote(ex.p)), true);
+        ex.p.settings.guaranteed = 500;
+        var noPump = pumpNote(ex.p);
+        same('напора хватает — установка не требуется', /^Насосная установка не требуется/.test(noPump), true);
+        same('и марка установки в лист не попала', /Helix/.test(noPump), false);
+
+        section('Выгрузка с пожарным краном и режимом «фактические напоры»');
+        var p = Model.create();
+        var pipe = { material: 'ГОСТ3262', od: 48, wall: 3 };
+        function props(role, len) { return { role: role, material: pipe.material, od: pipe.od, wall: pipe.wall, len: len }; }
+        var src = Model.addNode(p, 0, 0, { src: true });
+        var J = Model.addNode(p, 5, 0);
+        var S1 = Model.addNode(p, 8, 0, { spr: true });
+        var S2 = Model.addNode(p, 11, 0, { spr: true });
+        var P = Model.addNode(p, 5, 2, { pk: { jets: 2, flow: 3.5, head: 30, elev: -1.7, name: '' } });
+        Model.addSegment(p, src.id, J.id, props('main', 5));
+        Model.addSegment(p, J.id, S1.id, props('ray', 3));
+        Model.addSegment(p, S1.id, S2.id, props('ray', 3));
+        Model.addSegment(p, J.id, P.id, props('ray', 2));
+
+        [ 'sp', 'actual' ].forEach(function (mode) {
+            p.settings.tableMode = mode;
+            var n2 = Solver.solve(p);
+            var a2 = { project: p, net: n2, calc: Calc.build(p, n2) };
+            var sh2 = ExcelExport.sheets(a2);
+            var ch2 = formulaMismatches(sh2);
+            same(mode + ': лист «Пожарные краны» есть', sh2.some(function (s) { return s.name === 'Пожарные краны'; }), true);
+            same(mode + ': каждая формула даёт число программы', ch2.bad.slice(0, 5).join(' | '), '');
+        });
+    });
+
+    guard('ВПВ', function () {
+        section('ВПВ: табл. 7.3 СП 10.13130');
+        var t1 = Vpv.lookup(50, 8, 16, 20);
+        near('DN50, струя 8 м, спрыск 16, рукав 20: q', t1.q, 2.9);
+        near('… давление, м', t1.p, 13);
+        var t2 = Vpv.lookup(65, 12, 19, 20);
+        near('DN65, струя 12 м, спрыск 19, рукав 20: q', t2.q, 5.2);
+        near('… давление, м', t2.p, 19.9);
+        same('несуществующее сочетание не находится', Vpv.lookup(50, 20, 19, 20).found, false);
+
+        section('ВПВ: отметки этажей от вписанных вручную');
+
+        /*
+            Дом редко бывает ровным: первый этаж выше, второй тоже бывает
+            нетиповым. Вписанная отметка должна поднимать за собой все этажи
+            над ней — до следующей вписанной.
+        */
+        var fs = Vpv.newSection(1, 'С1');
+        fs.firstElev = 0;
+        fs.firstHeight = 4.65;
+        fs.floorHeight = 3;
+        fs.underHeight = 3.6;
+        fs.floorsFrom = -2;
+        fs.floorsTo = 6;
+
+        near('первый этаж — своя отметка', Vpv.floorElev(fs, 1), 0);
+        near('второй — через высоту первого', Vpv.floorElev(fs, 2), 4.65);
+        near('третий — плюс типовая', Vpv.floorElev(fs, 3), 7.65);
+        near('подземный — вниз от первого', Vpv.floorElev(fs, -1), -3.6);
+        near('второй подземный — ещё ниже', Vpv.floorElev(fs, -2), -7.2);
+
+        // Второй этаж нетиповой: вписали 4,85 — всё, что выше, едет за ним.
+        fs.overrides['2'] = 4.85;
+        near('вписанный этаж стоит, где сказано', Vpv.floorElev(fs, 2), 4.85);
+        near('третий поднялся вслед за ним', Vpv.floorElev(fs, 3), 7.85);
+        near('и шестой тоже', Vpv.floorElev(fs, 6), 16.85);
+        near('первый не тронулся', Vpv.floorElev(fs, 1), 0);
+        near('подземный не тронулся', Vpv.floorElev(fs, -1), -3.6);
+
+        // Следующая вписанная отметка обрывает цепочку: выше считают от неё.
+        fs.overrides['4'] = 11.2;
+        near('третий по-прежнему от второго', Vpv.floorElev(fs, 3), 7.85);
+        near('пятый — уже от четвёртого', Vpv.floorElev(fs, 5), 14.2);
+        near('шестой — от него же', Vpv.floorElev(fs, 6), 17.2);
+
+        // Типовую высоту поменяли — всё, что не вписано, пересчиталось.
+        fs.floorHeight = 3.3;
+        near('вписанные отметки не шелохнулись', Vpv.floorElev(fs, 4), 11.2);
+        near('а расчётные пересчитались', Vpv.floorElev(fs, 5), 14.5);
+
+        // Отметку стёрли — этаж вернулся в общую цепочку.
+        delete fs.overrides['4'];
+        near('без вписанной отметки — от второго', Vpv.floorElev(fs, 4), 4.85 + 3.3 * 2);
+        same('в списке этажей своя отметка помечена',
+            Vpv.floorsOf(fs).filter(function (f) { return !f.generated; }).map(function (f) { return f.n; }).join(','), '2');
+        same('нулевого этажа в списке нет',
+            Vpv.floorsOf(fs).some(function (f) { return f.n === 0; }), false);
+
+        section('ВПВ: марш по стояку против ручного счёта (Дарси–Вейсбах)');
+        // Три этажа по 3 м, клапан на 1,35 м, ввод на −3, магистраль на −1 длиной 20 м.
+        // Подводка 60×3 (d 54) 1 м, стояк 76×3 (d 70), магистраль 108×4 (d 100), Δ 0,5 мм, ν 1,31.
+        // Трубы неновые: расчётный диаметр на 1 мм меньше (53, 69, 99).
+        // Стояк на 2 струи, магистраль на 3, расход условный.
+        var v = Vpv.create();
+        v.inlet.elev = -3;
+        v.inlet.guaranteed = 10;
+        v.baseElev = -1;
+        v.pk.jets = 2;
+        v.pk.mainJets = 3;
+        v.sections[0].floorsFrom = 1;
+        v.sections[0].floorsTo = 3;
+        v.sections[0].firstHeight = 3;
+        v.sections[0].floorHeight = 3;
+        v.sections[0].mainLen = 20;
+
+        function dar(q, L, dmm, rough, formula) {
+            var dc = dmm - 1;
+            var d = dc / 1000;
+            var V = 4 * q / 1000 / (Math.PI * d * d);
+            var Re = V * d / 1.31e-6;
+            var lam = formula === 'shevelev'
+                ? (V >= 1.2 ? 0.021 / Math.pow(d, 0.3) : 0.0179 / Math.pow(d, 0.3) * Math.pow(1 + 0.867 / V, 0.3))
+                : formula === 'colebrook'
+                ? 0.25 / Math.pow(Math.log10(rough / (3.7 * dc) + 5.74 / Math.pow(Re, 0.9)), 2)
+                : 0.11 * Math.pow(rough / dc + 68 / Re, 0.25);
+            return lam * L / d * V * V / (2 * 9.81);
+        }
+
+        function expected(formula) {
+            var sumL = dar(2.9, 1, 54, 0.5, formula) + dar(2.9, 3, 70, 0.5, formula) + dar(5.8, 3, 70, 0.5, formula)
+                + dar(5.8, 2.35, 70, 0.5, formula) + dar(8.7, 20, 100, 0.5, formula);
+            return { sumL: sumL, Htr: (7.35 + 3) + sumL * 1.1 + 3 + 0.5 + 13 };
+        }
+
+        // Шевелев в табличной записи: 1000i = 1,07·V²/dр^1,3 (V ≥ 1,2 м/с).
+        var dr = 0.053;
+        var Vb = 0.0029 * 4 / (Math.PI * dr * dr);
+        near('Шевелев: i подводки Ду50 при 2,9 л/с = 0,00107·V²/dр^1,3', Vpv.darcy(2.9, 1, Vpv.pipeOf(v.branch, 1), v.hydr).dH,
+            0.00107 * Vb * Vb / Math.pow(dr, 1.3), 1e-4);
+        same('по умолчанию — Шевелев с запасом 1 мм', v.hydr.formula + ' ' + v.hydr.reserve, 'shevelev 1');
+
+        var res = Vpv.solve(v);
+        var ex = expected('shevelev');
+        same('расчёт без ошибок', res.errors.join(' | '), '');
+        near('условный расход стояка 2 × 2,9', res.dict.Qriser, 5.8);
+        near('условный расход магистрали 3 × 2,9', res.dict.Q, 8.7);
+        same('второй ПК в условном режиме — q по таблице', res.dict.jets[1].q, 2.9);
+        near('ΣНl по Шевелеву, м', res.dict.sumL, ex.sumL, 1e-9);
+        near('Нтр, м', res.dict.Htr, ex.Htr, 1e-9);
+        near('напор насоса = Нтр − Нгар', res.pumpHead, ex.Htr - 10, 1e-9);
+        near('у диктующего ПК при работе насоса ≈ Hпр', res.dict.floors[0].P, 13, 0.01);
+        near('гидростатика у нижнего ПК', res.hydro.value, 10 + (ex.Htr - 10) - (1.35 + 3), 1e-9);
+        same('текст струй по магистрали', res.jetsText, '3х2,5 / (3х2,9)');
+
+        v.hydr.formula = 'colebrook';
+        near('ΣНl по Колбруку–Уайту, м', Vpv.solve(v).dict.sumL, expected('colebrook').sumL, 1e-9);
+        v.hydr.formula = 'altshul';
+        near('ΣНl по Альтшулю, м', Vpv.solve(v).dict.sumL, expected('altshul').sumL, 1e-9);
+        same('старые данные без запаса → Шевелев, 1 мм', JSON.stringify(Vpv.normalize({ hydr: { formula: 'altshul', nu: 1.31 } }).hydr),
+            JSON.stringify({ formula: 'shevelev', nu: 1.31, reserve: 1 }));
+        same('выбор формулы с запасом сохраняется', Vpv.normalize({ hydr: { formula: 'altshul', nu: 1.31, reserve: 0 } }).hydr.formula, 'altshul');
+
+        // Уточнение п. 7.6: ПК этажом ниже под напором H, P + h подводки(k·√P) = H.
+        v.pk.growth = true;
+        v.pk.mainJets = 2;
+        var g = Vpv.solve(v);
+        var k = 2.9 / Math.sqrt(13);
+        var H = 13 + dar(2.9, 1, 54, 0.5) + 3 + dar(2.9, 3, 70, 0.5);
+        var P2 = H;
+        for (var it = 0; it < 100; it++) P2 = H - dar(k * Math.sqrt(P2), 1, 54, 0.5);
+        near('рост расхода: давление у второго ПК', g.dict.jets[1].P, P2, 1e-9);
+        near('рост расхода: расход стояка', g.dict.Qriser, 2.9 + k * Math.sqrt(P2), 1e-9);
+        same('магистраль на столько же струй — тот же расход', g.dict.Q, g.dict.Qriser);
+
+        v.pk.growth = false;
+        v.pk.jets = 1;
+        v.pk.mainJets = 2;
+        var one = Vpv.solve(v);
+        near('стояк на 1 струю', one.dict.Qriser, 2.9);
+        near('магистраль на 2 струи', one.dict.Q, 5.8);
+        same('старые данные: магистраль на столько же струй', Vpv.normalize({ pk: { jets: 3 } }).pk.mainJets, 3);
+
+        v.pk.jets = 2;
+        v.sections[0].floorsTo = 30;
+        var tall = Vpv.solve(v);
+        same('30 этажей: гидростатика сверх 90 м замечена', tall.hydro.ok, false);
+        same('30 этажей: нижним ПК нужны диафрагмы', tall.dict.floors[tall.dict.floors.length - 1].diaphragm, true);
+
+        section('ВПВ: выгрузка в Excel формулами');
+        v.sections[0].floorsTo = 3;
+        v.hydr.formula = 'shevelev';
+        Vpv.addSection(v);
+        var res2 = Vpv.solve(v);
+        var sh = VpvUI.excelSheets({ code: 'В2.1', title: 'ВПВ' }, v, res2);
+        var chk = formulaMismatches(sh);
+        same('формул в книге больше нуля', chk.count > 0, true);
+        same('каждая формула даёт число программы', chk.bad.slice(0, 5).join(' | '), '');
+
+        v.hydr.formula = 'colebrook';
+        v.pk.growth = true;
+        var res3 = Vpv.solve(v);
+        var chk3 = formulaMismatches(VpvUI.excelSheets({ code: 'В2.1', title: 'ВПВ' }, v, res3));
+        same('Колбрук и рост расхода: формулы дают числа программы', chk3.bad.slice(0, 5).join(' | '), '');
+
+        section('Имя файла для выгрузки');
+
+        /*
+            Наименование объекта в проекте длинное, а имя файла Windows держит
+            до 255 символов и обрезает по-живому: файл приходит с огрызком
+            вместо хвоста, и почта его потом не открывает.
+        */
+        var longName = '«Жилая застройка в границах улиц Восточная-Челюскинцев-пер. Строевой '
+            + 'в Железнодорожном районе г. Екатеринбурга. 1 этап строительства»';
+        var pdfName = Storage.safeName(longName, ' — каталожные листы.pdf');
+
+        same('имя укладывается в предел', pdfName.length <= 90, true);
+        same('хвост с расширением на месте', /— каталожные листы\.pdf$/.test(pdfName), true);
+        same('кавычки и прочие знаки убраны', /[«»\\/:*?"<>|]/.test(pdfName), false);
+        same('режется по слову, а не по живому', / $|[-–—.,;]$/.test(pdfName.replace(' — каталожные листы.pdf', '')), false);
+        same('начало имени — от объекта', pdfName.indexOf('Жилая застройка в границах улиц') === 0, true);
+
+        same('короткое имя не трогается',
+            Storage.safeName('ЖК Восточный', ' — схема.dxf'), 'ЖК Восточный — схема.dxf');
+        same('пустое имя — запасное', Storage.safeName('', '.aupt.json'), 'АУПТ.aupt.json');
+        same('переносы строк не попадают в имя',
+            Storage.safeName('Дом\nна горе', '.pdf'), 'Дом на горе.pdf');
+
+        section('Книга объекта');
+        var old = { format: 'sprinkler-web', name: 'Паркинг', settings: { systemName: 'В22' }, nodes: [], segments: [] };
+        var wrapped = Storage.unpackBook(JSON.parse(JSON.stringify(old)));
+        same('старый файл — книга с одной системой', wrapped.systems.length, 1);
+        same('код системы из старого файла', wrapped.systems[0].code, 'В22');
+        same('название объекта из старого файла', wrapped.object.name, 'Паркинг');
+
+        var book = Storage.newBook();
+        var added = Systems.add(book, 'vpv');
+        same('код новой ВПВ', added.code, 'В2.1');
+        added.vpv.sections[0].floorsTo = 17;
+        Vpv.addSection(added.vpv);
+        var back = Storage.unpackBook(JSON.parse(JSON.stringify(book)));
+        same('после сохранения систем две', back.systems.length, 2);
+        same('ВПВ сохраняет этажи', back.systems[1].vpv.sections[0].floorsTo, 17);
+        same('ВПВ сохраняет секции', back.systems[1].vpv.sections.length, 2);
+        same('копия системы получает новый id', Systems.duplicate(back, back.systems[1].id).id, 's3');
+
+        section('Приложения: один счёт на всю книгу');
+        var nb = Storage.newBook();
+        var vpvSys = Systems.add(nb, 'vpv');
+
+        // Пустой АПТ насоса не требует, у ВПВ напора не хватает — ей нужна насосная.
+        var reg = Appendix.list(nb);
+        same('приложений в книге', reg.map(function (e) { return e.no + ' ' + e.kind; }).join(', '),
+            '1 pump, 2 jockey, 3 calc, 4 calc');
+        same('первым идёт каталожный лист насосной', /^Каталожный лист насосной установки/.test(reg[0].title), true);
+        same('за ним жокей', /^Каталожный лист жокей-насоса/.test(reg[1].title), true);
+        same('номера не повторяются', reg.length, Object.keys(Appendix.numbers(nb)).length);
+
+        same('лист насосной ещё не загружен — замечание',
+            /Приложение 1: каталожный лист насосной установки/.test(Appendix.warnings(nb).join(' ')), true);
+
+        // Лист загрузили — замечание уходит, номер остаётся тем же.
+        nb.text.pumps = [{ id: vpvSys.id, role: 'main', name: 'CO-2 Helix V 1605', sheet: 'wilo.pdf' }];
+        same('после загрузки листа замечаний по насосу нет',
+            Appendix.warnings(nb).filter(function (w) { return /насосной установки/.test(w); }).length, 0);
+        same('номер каталожного листа прежний', Appendix.of(nb, 'pump:' + vpvSys.id), '1');
+
+        // Лист жокея — своей строкой и со своим номером.
+        nb.text.pumps.push({ id: vpvSys.id, role: 'jockey', name: 'CO-1 Helix V 605/CE+/J-ET', sheet: 'jockey.pdf' });
+        same('у жокея свой номер приложения', Appendix.of(nb, 'jockey:' + vpvSys.id), '2');
+        same('и замечаний по листам больше нет', Appendix.warnings(nb).length, 0);
+
+        // Жокей — по выбору: без него номера сдвигаются вверх.
+        vpvSys.jockey = false;
+        var noJockey = Appendix.list(nb);
+        same('без жокея приложений на одно меньше', noJockey.length, 3);
+        same('расчёт ВПВ подтянулся', Appendix.of(nb, 'vpv:' + vpvSys.id), '3');
+        same('и в записке жокея нет', Tch.jockeyTable(Tch.systems(nb), nb.text).length, 0);
+        vpvSys.jockey = true;
+
+        // План этажа — своё приложение на каждый лист.
+        var flr = Systems.add(nb, 'floors');
+        Floors.addPlan(flr.floors);
+        var withFloors = Appendix.list(nb).filter(function (e) { return e.kind === 'calc'; });
+        same('расчётов стало четыре: АПТ, ВПВ и два плана', withFloors.length, 4);
+        same('у планов разные номера',
+            Appendix.of(nb, 'plan:' + flr.id + ':' + flr.floors.plans[0].id)
+            !== Appendix.of(nb, 'plan:' + flr.id + ':' + flr.floors.plans[1].id), true);
+
+        // Первый номер задаётся в записке: том может начинаться не с единицы.
+        nb.text.appendixStart = 5;
+        same('счёт идёт от заданного номера', Appendix.list(nb)[0].no, 5);
+        same('ссылки записки берут те же номера',
+            String(Tch.appendices(nb, nb.text)[vpvSys.id]), Appendix.of(nb, 'vpv:' + vpvSys.id));
+        nb.text.appendixStart = 1;
+    });
+
+    guard('Текстовая часть', function () {
+        section('Записка: числа из систем');
+
+        // Книга: одна система АПТ (план из примера) и одна ВПВ.
+        var book = Storage.newBook();
+        var ex = excelExample();
+        book.systems[0].project = ex.p;
+        book.systems[0].compartment = '1, 2';
+        book.object.name = 'Жилой дом';
+        book.object.code = '18.01-70-ПК/2025-00-ПБ3';
+        book.object.height = 80;
+
+        var vpvSys = Systems.add(book, 'vpv');
+        vpvSys.compartment = '3';
+
+        var t = book.text;
+        var info = Tch.systems(book);
+        var nums = Tch.appendices(book, t);
+
+        // Сначала четыре каталожных листа (две насосные и два жокея), потом расчёты.
+        same('приложения идут после насосного оборудования', nums[book.systems[0].id] + ' и ' + nums[vpvSys.id], '5 и 6');
+
+        var flows = Tch.flowTable(info, t, nums);
+        same('в сводной таблице расходов строка на каждую систему', flows.length, 2);
+        same('расход АПТ — из расчёта по плану', flows[0][2], Fmt.num(Solver.solve(ex.p).Qtotal, 2));
+        same('расход ВПВ — из расчёта стояков', flows[1][2], Fmt.num(Vpv.solve(vpvSys.vpv).dict.Q, 2));
+        same('пожарный отсек попадает в таблицу', flows[0][1] + '/' + flows[1][1], '1, 2/3');
+
+        var jockey = Tch.jockeyTable(info, t);
+        var vpvRes = Vpv.solve(vpvSys.vpv);
+        var after = vpvRes.pumpHead + vpvSys.vpv.inlet.guaranteed;
+        same('жокей: напор после насосной = напор насоса + подпор', Fmt.num(Tch.pumpNeed(info.vpv[0]).after, 2), Fmt.num(after, 2));
+        same('жокей: включение — напор после насосной плюс 5 м', jockey[jockey.length - 1][2], Fmt.num(after + 5, 2));
+        same('жокей: создаваемое давление равно давлению включения', jockey[jockey.length - 1][1], jockey[jockey.length - 1][2]);
+        same('жокей: выключение ещё на 5 м выше', jockey[jockey.length - 1][3], Fmt.num(after + 10, 2));
+
+        t.jockeyDelta = 8;
+        var one = Tch.pumpNeed(info.all[0]);
+        same('запас жокея берётся из формы', Tch.jockeyTable(info, t)[0][3], Fmt.num(one.after + 16, 2));
+        t.jockeyDelta = 5;
+
+        var aptRow = Tch.aptTable(info, t)[0];
+        var s = ex.p.settings;
+        same('параметры АПТ: интенсивность, площадь, k', aptRow[2] + ' ' + aptRow[3] + ' ' + aptRow[5],
+            Fmt.trim(s.intensity, 3) + ' ' + Fmt.trim(s.area, 1) + ' ' + Fmt.trim(s.k, 2));
+        same('напор у оросителя в МПа', aptRow[6], Fmt.trim(s.dictHead / 100, 3));
+
+        var vpvRow = Tch.vpvTable(info, t)[0];
+        same('параметры ВПВ: струи и давление', vpvRow[1] + ' / ' + vpvRow[6], Vpv.solve(vpvSys.vpv).jetsText + ' / ' + Fmt.trim(13 / 100, 3));
+
+        section('Записка: текст по высоте здания');
+        var tallNorms = Tch.norms(book, t).join(' | ');
+        same('выше 75 м — высотные своды правил', /СП 477/.test(tallNorms) && /СП 253/.test(tallNorms), true);
+        same('и СП 550.1311500.2026', /СП 550\.1311500\.2026 «Здания высотные/.test(tallNorms), true);
+        same('СП 10.13130.2020 — с изм. 1', /СП 10\.13130\.2020 изм\. 1 «Системы/.test(tallNorms), true);
+        same('он же назван в тексте', TchText.build(book, t).some(function (b) {
+            return b.type === 'p' && b.text.indexOf('СП 550.1311500.2026') >= 0;
+        }), true);
+
+        book.object.height = 40;
+        var lowNorms = Tch.norms(book, t).join(' | ');
+        same('до 75 м — без высотных сводов', /СП 477|СП 253|СП 550/.test(lowNorms), false);
+
+        section('СТУ упоминаются только когда они есть');
+        var sb2 = Storage.newBook();
+        var sv2 = Systems.add(sb2, 'vpv');
+        sb2.object.height = 99;             // высотное здание, но СТУ не отмечены
+        sb2.text.stu = false;
+
+        function hydroLine(bk) {
+            return TchText.build(bk, bk.text).filter(function (b) {
+                return b.type === 'p' && b.text.indexOf('Гидростатическое давление') >= 0;
+            })[0].text;
+        }
+
+        same('без галочки СТУ в тексте нет', /СТУ/.test(hydroLine(sb2)), false);
+        same('предел обоснован пунктом СП 10', /п\. 6\.2\.20 СП 10\.13130\.2020/.test(hydroLine(sb2)), true);
+        same('и в перечень норм СТУ не попали', /СТУ/.test(Tch.norms(sb2, sb2.text).join(' | ')), false);
+
+        sb2.text.stu = true;
+        same('с галочкой — ссылка на СТУ', /согласно СТУ/.test(hydroLine(sb2)), true);
+        sb2.text.stu = false;
+
+        // Предел берётся из расчёта ВПВ, а не из отдельного поля записки.
+        sv2.vpv.limits.hydro = 60;
+        sb2.text.hydroLimit = 90;
+        same('в тексте предел из расчёта', /не превышает 60 м вод\. ст\./.test(hydroLine(sb2)), true);
+        same('и обоснован заданием, раз СТУ нет', /согласно заданию/.test(hydroLine(sb2)), true);
+        same('об этом есть замечание',
+            /Предел гидростатики 60 м отличается/.test(Tch.dataWarnings(sb2).join(' ')), true);
+
+        section('Записка: своды правил по стоянкам');
+        var pb = Storage.newBook();
+        same('без паркинга норм по стоянкам нет', /СП 551|СП 113/.test(Tch.norms(pb, pb.text).join(' | ')), false);
+        same('и сам признак не сработал', Tch.parking(pb, pb.text), false);
+
+        // Паркинг узнаётся по словам в системе — название, зона, объект расчёта.
+        pb.systems[0].title = 'система автоматического пожаротушения Паркинга';
+        same('паркинг виден по наименованию системы', Tch.parking(pb, pb.text), true);
+
+        var pnorms = Tch.norms(pb, pb.text).join(' | ');
+        same('СП 551.1311500.2026 добавлен', /СП 551\.1311500\.2026 «Системы противопожарной защиты\. Стоянки/.test(pnorms), true);
+        same('и СП 113.13330.2023', /СП 113\.13330\.2023 «Стоянки автомобилей»/.test(pnorms), true);
+
+        pb.systems[0].title = 'система автоматического пожаротушения';
+        pb.systems[0].project.settings.tableTitle = 'Спринклерное пожаротушение автостоянки';
+        same('и по названию таблицы расчёта тоже', Tch.parking(pb, pb.text), true);
+
+        pb.systems[0].project.settings.tableTitle = 'Спринклерное пожаротушение';
+        pb.systems[0].project.settings.group = '2';     // «производства, гаражи и стоянки»
+        same('по одной группе помещений — нет: в ней и производства', Tch.parking(pb, pb.text), false);
+
+        var blocks = TchText.build(book, t);
+        var headings = blocks.filter(function (b) { return b.type === 'heading'; }).length;
+        var tables = blocks.filter(function (b) { return b.type === 'table'; }).length;
+        same('разделов в записке', headings, 5);
+        same('таблиц в записке', tables, 6);
+        same('первый раздел — исходные данные', blocks[0].text, 'Исходные данные');
+        same('в тексте есть номера приложений систем', blocks.some(function (b) {
+            return b.type === 'p' && b.text.indexOf('приложение ' + nums[book.systems[0].id]) >= 0;
+        }), true);
+
+        // Высота сама по себе СТУ не даёт: ссылка на них только по галочке.
+        book.object.height = 80;
+        same('высотное здание без галочки — без СТУ', TchText.build(book, t).some(function (b) {
+            return b.type === 'p' && b.text.indexOf('согласно СТУ') >= 0;
+        }), t.stu === true);
+
+        var stuWas = t.stu;
+        t.stu = true;
+        same('с галочкой гидростатика обоснована СТУ', TchText.build(book, t).some(function (b) {
+            return b.type === 'p' && b.text.indexOf('согласно СТУ') >= 0;
+        }), true);
+        t.stu = stuWas;
+
+        section('Сборка .docx');
+        var xml = Docx.body(blocks);
+        same('абзацы и таблицы в XML', /<w:p>/.test(xml) && /<w:tbl>/.test(xml), true);
+        same('заголовки берут стиль шаблона', xml.indexOf('<w:pStyle w:val="1"/>') >= 0, true);
+        same('текст экранируется', Docx.body([{ type: 'p', text: 'трубы <50 & «ПБ»' }]).indexOf('&lt;50 &amp;') >= 0, true);
+
+        var pack = Docx.standalone(blocks);
+        same('в пакете есть документ и стили', pack.filter(function (e) {
+            return e.name === 'word/document.xml' || e.name === 'word/styles.xml';
+        }).length, 2);
+        same('файл .docx собирается', Docx.bytes(pack).length > 20000, true);
+
+        // Подставной шаблон: два раздела, как в записке бюро (титул и текст).
+        var fake = '<?xml version="1.0"?><w:document><w:body>'
+            + '<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:t>Титул</w:t></w:r></w:p>'
+            + '<w:p><w:r><w:t>Старый текст записки</w:t></w:r></w:p>'
+            + '<w:sectPr><w:headerReference r:id="rId7"/></w:sectPr></w:body></w:document>';
+        var zip = { files: [{ name: 'word/document.xml', bytes: Zip.utf8(fake) }, { name: 'word/header1.xml', bytes: Zip.utf8('<x/>') }] };
+        zip.map = { 'word/document.xml': zip.files[0], 'word/header1.xml': zip.files[1] };
+
+        var out = Docx.graft(zip, blocks, true);
+        var doc = out.filter(function (e) { return e.name === 'word/document.xml'; })[0].text;
+        same('колонтитулы шаблона остаются', out.length, 2);
+        same('титульный лист сохранён', doc.indexOf('Титул') >= 0, true);
+        same('старый текст записки заменён', doc.indexOf('Старый текст записки') >= 0, false);
+        same('раздел со штампом остался в конце', doc.indexOf('headerReference') >= 0, true);
+        same('новый текст вставлен один раз', doc.split('Исходные данные').length - 1, 1);
+        same('без титульных листов — только новый текст', Docx.graft(zip, blocks, false).filter(function (e) {
+            return e.name === 'word/document.xml';
+        })[0].text.indexOf('Титул') >= 0, false);
+    });
+
+    guard('Каталожные листы насосов', function () {
+        section('Чтение PDF: куски, строки, карты шрифтов');
+
+        var cmap = Pdf.parseCMap('2 beginbfchar <0003> <0020> <01c9> <0430> endbfchar '
+            + '1 beginbfrange <01bb> <01bd> <0422> endbfrange');
+        same('bfchar: код 0x1c9 — буква «а»', cmap[0x01c9], 'а');
+        same('bfrange: код 0x1bc — буква «У»', cmap[0x01bc], 'У');
+
+        same('строка (…) с экранированием', Pdf.readString('(Напор \\(треб\\) 33)', 0).value, 'Напор (треб) 33');
+        same('строка <…> шестнадцатеричная', Pdf.readString('<4142>', 0).value, 'AB');
+
+        var items = [
+            { x: 300, y: 700, size: 10, text: '33.08' },
+            { x: 100, y: 700, size: 10, text: 'Напор' },
+            { x: 100, y: 686, size: 10, text: 'Подача' }
+        ];
+        var lines = Pdf.toLines(items);
+        same('куски собираются в строки сверху вниз', lines.map(function (l) { return l.text; }).join(' | '), 'Напор 33.08 | Подача');
+
+        section('Разбор каталожного листа');
+
+        function sheetOf(list, file) {
+            return Pumps.parse([{ lines: list.map(function (t) { return { text: t }; }) }], file);
+        }
+
+        var wilo = sheetOf([
+            'Технические данные',
+            'CO 2 MVL 2003/SK-FFS-R-CS',
+            'Тип: Модульная насосная установка (пожаротушение)',
+            'Назначение: ВПВ 1 зона корпус 1',
+            'Исходные параметры',
+            'Подача 5.8 л/с',
+            'Напор 30.38 м',
+            'Фактическая рабочая точка (без потерь)',
+            'Подача 6.05 л/с',
+            'Напор 33.08 м',
+            'Мощность P2 2.89 кВт',
+            'КПД 67.69 %',
+            'NPSH 2.33 м',
+            'Данные продукта',
+            'Тип насосов MVL 2003-3/25/E/3-400-50-2-S1',
+            'Кол-во рабочих насосов 1',
+            'Кол-во резервных насосов 1',
+            'Данные мотора',
+            'Номинальная мощность 4 кВт',
+            'Номинальный ток 7.65 А'
+        ], 'ВПВ 1 зона корпус 1_CO 2 MVL 2003.pdf');
+
+        same('марка установки', wilo.name, 'CO 2 MVL 2003/SK-FFS-R-CS');
+        same('назначение', wilo.purpose, 'ВПВ 1 зона корпус 1');
+        same('заданная точка', wilo.duty.Q + ' / ' + wilo.duty.H, '5.8 / 30.38');
+        same('фактическая точка', wilo.actual.Q + ' / ' + wilo.actual.H, '6.05 / 33.08');
+        same('мощность P2 и NPSH', wilo.actual.P2 + ' / ' + wilo.actual.npsh, '2.89 / 2.33');
+        same('номинальная мощность двигателя', wilo.power, 4);
+        same('количество насосов', wilo.count, '1 раб., 1 рез.');
+        same('тип насосов', wilo.pumpType, 'MVL 2003-3/25/E/3-400-50-2-S1');
+        same('лист разобран', wilo.ok, true);
+
+        // Лист старого образца: подписи набраны с разрядкой, единицы латиницей.
+        var old = sheetOf([
+            'CO-1 M VL 404/J-ET-R',
+            'Да нные за про са',
+            'Р а сх од 5,8 l/s',
+            'На по р 28,59 m',
+            'Рабочая точка',
+            'Ра сх од 6,19 l/s',
+            'На по р 32,5 m',
+            'М ощ ность на валу P2 0,636 kW',
+            'Н ом. мощ ность Р2 0,75 kW'
+        ], 'старый лист.pdf');
+        same('разрядка в подписях не мешает', old.duty.Q + ' / ' + old.duty.H, '5.8 / 28.59');
+        same('рабочая точка старого листа', old.actual.H, 32.5);
+        same('буквы марки склеиваются обратно', old.name, 'CO-1 MVL 404/J-ET-R');
+        same('«Ном. мощность Р2 0,75» — это 0,75 кВт, а не 20,75', old.power, 0.75);
+        same('мощность на валу — это P2', old.actual.P2, 0.636);
+
+        section('Лист ложится на свою систему');
+
+        var book = Storage.newBook();
+        book.systems[0].code = 'В21';
+        var vpv = Systems.add(book, 'vpv');
+        vpv.vpv.zone = '1 зона';
+
+        same('лист АПТ — к системе АПТ', Pumps.match(sheetOf(['CO 2 BL 80/200-30/2/SK-FFS-J2-R-CS', 'Назначение: АПТ корпус 1',
+            'Исходные параметры', 'Подача 38.19 л/с', 'Напор 34.3 м'], 'АПТ.pdf'), book), book.systems[0].id);
+        same('лист ВПВ — к системе ВПВ', Pumps.match(wilo, book), vpv.id);
+
+        var row = Pumps.toRow(wilo, vpv.id);
+        same('в строку таблицы 4 идёт фактическая точка', row.Qf + ' / ' + row.Hf, '6.05 / 33.08');
+        same('и мощность двигателя, а не P2', row.power, '4');
+        same('в строке помнится имя листа', row.sheet, 'ВПВ 1 зона корпус 1_CO 2 MVL 2003.pdf');
+
+        book.text.pumps = [row];
+        var table = Tch.pumpTable(Tch.systems(book), book.text);
+        var last = table[table.length - 1];
+        same('таблица записки берёт марку из листа', last[0], 'CO 2 MVL 2003/SK-FFS-R-CS');
+        same('и фактический напор', last[7], '33,08');
+
+        section('Жокей-насос не вытесняет основную установку');
+
+        var jockeySheet = sheetOf([
+            'Технические данные',
+            'CO 1 MVL 206/J-ET-R',
+            'Назначение: 1 зона жокей',
+            'Исходные параметры',
+            'Подача 1 л/с',
+            'Напор 43 м',
+            'Фактическая рабочая точка (без потерь)',
+            'Подача 2.12 л/с',
+            'Напор 43.87 м',
+            'Данные мотора',
+            'Номинальная мощность 0.75 кВт',
+            'Кол-во рабочих насосов 1'
+        ], '1 зона жокей_CO 1 MVL 206_J-ET-R.pdf');
+
+        same('лист жокея узнаётся по названию и назначению', jockeySheet.role, 'jockey');
+        same('лист основной установки — основной', wilo.role, 'main');
+
+        var jockeyRow = Pumps.toRow(jockeySheet, vpv.id);
+        book.text.pumps = [row, jockeyRow];
+        same('две строки на одну систему уживаются', book.text.pumps.length, 2);
+
+        var withJockey = Tch.pumpTable(Tch.systems(book), book.text);
+        same('строк в таблице 4: по системам плюс жокей', withJockey.length, 3);
+        same('основная установка осталась на месте', withJockey[1][0], 'CO 2 MVL 2003/SK-FFS-R-CS');
+        same('жокей идёт отдельной строкой', withJockey[2][0], 'CO 1 MVL 206/J-ET-R');
+        same('у жокея своя требуемая точка из листа', withJockey[2][4] + ' / ' + withJockey[2][5], '1,00 / 43,00');
+        same('и своя мощность', withJockey[2][2], '0,75');
+
+        section('Насосы поменялись: замена листов');
+
+        var fresh = Storage.newBook();
+        var sys2 = Systems.add(fresh, 'vpv');
+
+        var first = PumpWindow.place(fresh, wilo, sys2.id);
+        same('первый лист — добавлен', first.kind, 'added');
+
+        var again = PumpWindow.place(fresh, wilo, sys2.id);
+        same('тот же лист ещё раз — обновлён, строка одна', again.kind + ' / ' + fresh.text.pumps.length, 'updated / 1');
+
+        var bigger = sheetOf(['CO 2 MVL 2005/SK-FFS-R-CS', 'Назначение: ВПВ 1 зона', 'Исходные параметры', 'Подача 5.8 л/с',
+            'Напор 45 м', 'Фактическая рабочая точка', 'Подача 6.2 л/с', 'Напор 47.1 м'], 'новый насос.pdf');
+        var swap = PumpWindow.place(fresh, bigger, sys2.id);
+        same('другая установка — «было → стало»', swap.kind, 'replaced');
+        same('в отчёте видно, что на что поменялось', swap.text.indexOf('CO 2 MVL 2003/SK-FFS-R-CS → CO 2 MVL 2005/SK-FFS-R-CS') >= 0, true);
+        same('новая фактическая точка встала на место старой', fresh.text.pumps[0].Hf, 47.1);
+        same('у строки есть дата загрузки', /^\d\d\.\d\d\.\d{4}$/.test(fresh.text.pumps[0].loadedAt), true);
+
+        PumpWindow.place(fresh, jockeySheet, sys2.id);
+        same('жокей не заменяет основную установку', fresh.text.pumps.map(function (p) { return p.role; }).sort().join(','), 'jockey,main');
+
+        section('Старые строки: жокей, записанный основной установкой');
+        var migrated = Tch.normalize({ pumps: [
+            { id: 's2', role: 'main', name: 'CO 1 MVL 206/J-ET-R', sheet: 'старый.pdf' },
+            { id: 's2', role: 'jockey', name: 'CO 1 MVL 206/J-ET-R', sheet: 'новый.pdf' },
+            { id: 's3', role: 'main', name: 'CO 2 BL 50/260-37/2/SK-FFS-R-CS', sheet: 'основной.pdf' }
+        ] }).pumps;
+        same('жокей из основной роли переведён в жокеи', migrated.filter(function (p) { return p.id === 's2'; }).map(function (p) { return p.role; }).join(','), 'jockey');
+        same('повтор строки убран, остался последний лист', migrated.filter(function (p) { return p.id === 's2'; })[0].sheet, 'новый.pdf');
+        same('основная установка «…J2-R-CS» осталась основной', migrated.filter(function (p) { return p.id === 's3'; })[0].role, 'main');
+    });
+
+    guard('АПТ по этажам', function () {
+        section('АПТ по этажам: стояк против ручного счёта');
+
+        // План этажа: ввод (врезка в стояк) —5 м— J —3 м— S1 —3 м— S2, трубы 48×3.
+        function floorPlan() {
+            var p = Model.create();
+            p.settings.dictHead = 18;
+            p.settings.k = 0.47;
+            var pp = { material: 'ГОСТ3262', od: 48, wall: 3 };
+            function props(role, len) { return { role: role, material: pp.material, od: pp.od, wall: pp.wall, len: len }; }
+            var src = Model.addNode(p, 0, 0, { src: true });
+            var J = Model.addNode(p, 5, 0);
+            var S1 = Model.addNode(p, 8, 0, { spr: true });
+            var S2 = Model.addNode(p, 11, 0, { spr: true });
+            Model.addSegment(p, src.id, J.id, props('main', 5));
+            Model.addSegment(p, J.id, S1.id, props('ray', 3));
+            Model.addSegment(p, S1.id, S2.id, props('ray', 3));
+            return p;
+        }
+
+        var v = Floors.create();
+        v.plans[0].project = floorPlan();
+        v.plans[0].floorsFrom = 1;
+        v.plans[0].floorsTo = 3;
+        var sec = v.sections[0];
+        sec.floorsFrom = 1;
+        sec.floorsTo = 3;
+        sec.firstElev = 0;
+        sec.firstHeight = 3;
+        sec.floorHeight = 3;
+        sec.mainLen = 20;
+        v.sprinklerHeight = 2.7;
+        v.floorNodeLoss = 0.5;
+        v.baseElev = -1;
+        v.inlet.guaranteed = 10;
+        v.inlet.elev = -3;
+        v.inlet.stationLoss = 3;
+        v.inlet.localFactor = 1.2;
+        v.inlet.cuKind = 'Прямоточный';
+        v.inlet.cuDn = 100;
+
+        var res = Floors.solve(v, null);
+        var net = Solver.solve(v.plans[0].project);
+        same('расчёт без ошибок', res.errors.join(' | '), '');
+        same('диктующий — верхний этаж', res.dict.floor.n, 3);
+
+        var Q = net.Qtotal;
+        var dHr = Q * Q * 9.7 / 554.57;
+        var dHm = Q * Q * 20 / 3803.14;
+        var Hnet = (net.HnetRaw + dHr + dHm) * 1.2;
+        var Hcu = 1000 * 1.6975e-7 * (Q * 3.6) * (Q * 3.6);
+        var Htr = (6 + 2.7 + 3) + 3 + Hnet + Hcu + net.Hdict + 0.5;
+
+        near('расход этажа = расход плана', res.dict.Q, Q, 1e-12);
+        near('ΔH стояка до отметки магистрали', res.dict.dHr, dHr, 1e-9);
+        near('ΔH магистрали', res.dict.dHm, dHm, 1e-9);
+        near('Нтр диктующего этажа', res.dict.Htr, Htr, 1e-9);
+        near('Нр = Нтр − Нгар', res.pumpHead, Htr - 10, 1e-9);
+        same('нижний этаж требует меньше', res.floors.filter(function (r) { return r.floor.n === 1; })[0].Htr < Htr, true);
+
+        section('Типовой и нетиповой планы');
+        var first = Floors.addPlan(v);
+        first.name = '1 этаж';
+        first.floorsFrom = 1;
+        first.floorsTo = 1;
+        first.project = floorPlan();
+        same('этаж 1 — нетиповой план', Floors.planFor(v, sec, 1).name, '1 этаж');
+        same('этаж 2 — типовой план', Floors.planFor(v, sec, 2).name, 'Типовой этаж');
+
+        v.plans[0].floorsFrom = 2;
+        v.plans[0].floorsTo = 2;
+        var gap = Floors.solve(v, null);
+        same('этаж без плана — без АПТ', gap.floors.filter(function (r) { return r.floor.n === 3; })[0].plan, null);
+        same('о нём есть замечание', gap.warnings.some(function (w) { return /без плана/.test(w); }), true);
+        v.plans[0].floorsTo = 3;
+
+        section('Пожарные краны на стояке АПТ и насосная');
+        var book = Storage.newBook();
+        var flo = Systems.add(book, 'floors');
+        flo.floors = v;
+        var vpvSys = Systems.add(book, 'vpv');
+        var qVpv = Vpv.solve(vpvSys.vpv).dict.Q;
+        var qApt = Floors.solve(v, book).dict.Q;
+
+        v.pk.onRiser = true;
+        v.pk.vpv = vpvSys.id;
+        var withPk = Floors.solve(v, book);
+        near('по стояку идёт Q АПТ + Q ВПВ', withPk.dict.Qr, qApt + qVpv, 1e-9);
+        same('потери стояка выросли', withPk.dict.dHr > res.dict.dHr, true);
+
+        v.pk.onRiser = false;
+        book.stations = [Stations.create(book)];
+        var st = book.stations[0];
+        Stations.assign(book, st, flo.id, true);
+        Stations.assign(book, st, vpvSys.id, true);
+
+        var sum = Stations.need(book, st);
+        near('насосная, расходы суммируются', sum.Q, qApt + qVpv, 1e-9);
+        var hpApt = Floors.solve(v, book).dict.Hp;
+        var hpVpv = Vpv.solve(vpvSys.vpv).dict.Hp;
+        near('напор насосной — наибольший из систем', sum.H, Math.max(hpApt, hpVpv), 1e-9);
+
+        st.sumFlows = false;
+        near('без суммирования — наибольший расход', Stations.need(book, st).Q, Math.max(qApt, qVpv), 1e-9);
+        st.sumFlows = true;
+
+        v.pk.onRiser = true;
+        v.pk.vpv = vpvSys.id;
+        var once = Stations.need(book, st);
+        near('краны на стояке АПТ не считаются дважды', once.Q, qApt + qVpv, 1e-9);
+        v.pk.onRiser = false;
+
+        Stations.assign(book, book.stations.concat([Stations.create(book)])[1], vpvSys.id, true);
+        same('система входит только в одну насосную', st.systems.indexOf(vpvSys.id), -1);
+        Stations.assign(book, st, vpvSys.id, true);
+
+        section('Книга: сохранение и записка');
+        var back = Storage.unpackBook(JSON.parse(JSON.stringify(book)));
+        var flBack = back.systems.filter(function (s) { return s.kind === 'floors'; })[0];
+        same('система «по этажам» сохраняется', !!flBack, true);
+        same('планы этажей с геометрией', flBack.floors.plans.length + ' / ' + flBack.floors.plans[0].project.nodes.length, '2 / 4');
+        same('насосная сохраняется', back.stations.length + ' / ' + back.stations[0].systems.length, '1 / 2');
+        near('после сохранения Нтр тот же', Floors.solve(flBack.floors, back).dict.Htr, Floors.solve(v, book).dict.Htr, 1e-9);
+
+        var data = Tch.systems(back);
+        var owners = Tch.owners(data);
+        same('в таблице 4 насосная вместо своих систем', owners.filter(function (o) { return o.kind === 'station'; }).length, 1);
+        same('системы насосной отдельными строками не идут',
+            owners.some(function (o) { return o.sys.id === flBack.id; }), false);
+        var t4 = Tch.pumpTable(data, back.text);
+        var stRow = t4.filter(function (r) { return r[1] === back.stations[0].zone || r[1] === back.stations[0].name; })[0];
+        same('Qтр насосной — сумма расходов', stRow && stRow[4], Fmt.num(Stations.need(back, back.stations[0]).Q, 2));
+        same('АПТ по этажам попала в таблицу 1', Tch.aptTable(data, back.text).length, 2);
+        same('системы удалённой из книги нет в насосной', (function () {
+            Systems.remove(back, vpvSys.id);
+            return back.stations[0].systems.indexOf(vpvSys.id);
+        })(), -1);
+    });
+
+    guard('Сквозной расчёт плана этажа', function () {
+        section('План этажа: продолжение по стояку до ввода');
+
+        function floorPlan() {
+            var p = Model.create();
+            p.settings.dictHead = 18;
+            p.settings.k = 0.47;
+            function props(role, len) { return { role: role, material: 'ГОСТ3262', od: 48, wall: 3, len: len }; }
+            var src = Model.addNode(p, 0, 0, { src: true });
+            var J = Model.addNode(p, 5, 0);
+            var S1 = Model.addNode(p, 8, 0, { spr: true });
+            var S2 = Model.addNode(p, 11, 0, { spr: true });
+            Model.addSegment(p, src.id, J.id, props('main', 5));
+            Model.addSegment(p, J.id, S1.id, props('ray', 3));
+            Model.addSegment(p, S1.id, S2.id, props('ray', 3));
+            return p;
+        }
+
+        var book = Storage.newBook();
+        var fsys = Systems.add(book, 'floors');
+        var v = fsys.floors;
+        v.plans[0].project = floorPlan();
+        v.plans[0].floorsFrom = 1;
+        v.plans[0].floorsTo = 3;
+        v.sections[0].floorsFrom = 1;
+        v.sections[0].floorsTo = 3;
+
+        var res = Floors.solve(v, book);
+        var chain = Floors.chain(v, res, v.plans[0].id);
+        var net = Solver.solve(v.plans[0].project);
+
+        same('продолжение — два участка', chain.rows.map(function (r) { return r.name; }).join(' / '),
+            'врезка — низ стояка / стояк — насосная');
+        same('план диктует на верхнем этаже', chain.rec.floor.n, 3);
+        near('напор у врезки = Нсв + потери сети этажа', chain.atTee, net.Hdict + net.HnetRaw, 1e-12);
+        near('ΔH стояка тот же, что в расчёте этажа', chain.rows[0].dH, chain.rec.dHr, 1e-12);
+        near('ΔH магистрали тот же', chain.rows[1].dH, chain.rec.dHm, 1e-12);
+        near('напор у насосной — с потерями стояка и магистрали',
+            chain.atPump, chain.atTee + chain.rec.dHr + chain.rec.dHm, 1e-12);
+        same('расход по стояку берётся вместе с ПК, если они на нём', chain.rows[0].Q, chain.rec.Qr);
+        same('у плана, который никому не назначен, продолжения нет', Floors.chain(v, res, 'нет такого'), null);
+
+        section('Выгрузка плана этажа: лист «Стояк»');
+        var saved = window.App;
+        window.App = { book: book };
+
+        var app = {
+            project: v.plans[0].project,
+            plan: { sys: fsys.id, plan: v.plans[0].id, name: v.plans[0].name }
+        };
+        app.net = Solver.solve(app.project);
+        app.calc = Calc.build(app.project, app.net);
+
+        var sheetList = ExcelExport.sheets(app);
+        same('в книге появился лист «Стояк»', sheetList.some(function (s) { return s.name === 'Стояк'; }), true);
+
+        var chk = formulaMismatches(sheetList);
+        same('каждая формула даёт число программы', chk.bad.slice(0, 5).join(' | '), '');
+
+        var riserSheet = sheetList.filter(function (s) { return s.name === 'Стояк'; })[0];
+        var reqRow = riserSheet.grid.filter(function (line) { return line[0] && line[0].v === 'Нтр'; })[0];
+        near('Нтр на листе — как в расчёте системы', reqRow[2].v, chain.rec.Htr, 1e-9);
+
+        if (saved === undefined) delete window.App;
+        else window.App = saved;
+    });
+
+    guard('Диафрагмы', function () {
+        section('Шайба: формула и подбор');
+
+        // ΔH = Q²/(2g·(Cд·A)²), Cд = 0,62/√(1 − β⁴).
+        function manual(q, d, D) {
+            var dm = d / 1000;
+            var area = Math.PI * dm * dm / 4;
+            var beta = d / D;
+            var cd = 0.62 / Math.sqrt(1 - Math.pow(beta, 4));
+            var v = (q / 1000) / (cd * area);
+            return v * v / (2 * 9.81);
+        }
+
+        near('потери на шайбе ⌀16 в трубе 54 при 2,9 л/с', Diaphragm.head(2.9, 16, 54), manual(2.9, 16, 54), 1e-12);
+        near('диаметр — обратная задача', Diaphragm.diameter(2.9, Diaphragm.head(2.9, 16, 54), 54), 16, 1e-6);
+        same('без расхода или без среза шайба не нужна', Diaphragm.diameter(0, 30, 54) + Diaphragm.diameter(2.9, 0, 54), 0);
+        same('чем больше срез, тем меньше отверстие',
+            Diaphragm.diameter(2.9, 40, 54) < Diaphragm.diameter(2.9, 20, 54), true);
+
+        var pick = Diaphragm.pick(2.9, 30, 54, { step: 1, min: 6 });
+        same('диаметр округляется вверх до шага', pick.d, Math.ceil(pick.exact));
+        same('срез с принятым диаметром чуть меньше нужного', pick.cut < pick.need, true);
+
+        var down = Diaphragm.pick(2.9, 30, 54, { step: 1, min: 6, round: 'down' });
+        same('округление вниз даёт меньший диаметр', down.d, Math.floor(pick.exact));
+        same('и срезает не меньше нужного', down.cut > down.need, true);
+        near('и равен потерям на принятой шайбе', pick.cut, Diaphragm.head(2.9, pick.d, 54), 1e-12);
+        same('шайба шире трубы не предлагается', Diaphragm.pick(20, 0.05, 54, { step: 1 }).ok, false);
+
+        // При малом срезе отверстие близко к трубе: шайба бессмысленна.
+        near('малый срез: диаметр близок к трубе', Diaphragm.diameter(5.4, 0.55, 54), 46.5, 0.02);
+        same('и шайба не предлагается', Diaphragm.pick(5.4, 0.55, 54, { step: 1 }).reason, 'срез мал — шайба не нужна');
+        same('решение не прыгает: большой срез считается верно',
+            Math.abs(Diaphragm.head(5.4, Diaphragm.diameter(5.4, 25, 54), 54) - 25) < 1e-6, true);
+        same('общий срез стояка — наименьший из этажей', Diaphragm.common([12, 4, 25]), 4);
+
+        section('Диафрагмы ВПВ');
+        var v = Vpv.create();
+        v.sections[0].floorsTo = 20;
+        v.dia.target = 45;
+        v.dia.step = 1;
+
+        var res = Vpv.solve(v);
+        var low = null;
+        res.marches[0].floors.forEach(function (f) { if (!low || f.P > low.P) low = f; });
+
+        same('у самого нагруженного ПК подобрана шайба', !!(low.dia && low.dia.ok), true);
+        near('срезать = давление минус 45 м', low.need, low.P - 45, 1e-9);
+        near('после шайбы остаётся P − срез', low.after, low.P - low.dia.cut, 1e-12);
+        same('давление после шайбы не ниже требуемого Hпр', low.after >= res.P1, true);
+        same('верхние ПК без шайб', res.marches[0].floors[0].dia, null);
+        same('у самого высокого стояка общей шайбы нет: верхнему ПК резать нечего', res.marches[0].riserDia, null);
+
+        // Низкая секция питается от того же насоса: лишнее есть у всех её ПК.
+        var lowSection = Vpv.addSection(v);
+        lowSection.floorsTo = 8;
+        var two = Vpv.solve(v);
+        var lowMarch = two.marches.filter(function (m) { return m.section === lowSection; })[0];
+        same('низкому стояку подобрана общая шайба', !!lowMarch.riserDia, true);
+        near('она срезает наименьший излишек стояка',
+            lowMarch.riserDia.need, Math.min.apply(null, lowMarch.floors.map(function (f) { return f.need; })), 1e-9);
+        v.sections = [v.sections[0]];
+
+        v.dia.mode = 'excess';
+        var toNeed = Vpv.solve(v);
+        near('режим «до Hпр»: срез до требуемого напора', toNeed.dia.allowed, toNeed.P1, 1e-12);
+        same('шайб стало больше', toNeed.dia.floors > res.dia.floors, true);
+
+        v.dia.mode = 'fixed';
+        v.dia.target = 5;
+        var tooLow = Vpv.solve(v);
+        near('ниже Hпр срезать нельзя', tooLow.dia.allowed, tooLow.P1, 1e-12);
+        same('и об этом сказано', tooLow.warnings.some(function (w) { return /Срезать до/.test(w); }), true);
+
+        v.dia.on = false;
+        same('подбор можно выключить', Vpv.solve(v).dia.floors, 0);
+
+        section('Диафрагмы АПТ по этажам');
+        function floorPlan() {
+            var p = Model.create();
+            p.settings.dictHead = 18;
+            p.settings.k = 0.47;
+            var pp = { material: 'ГОСТ3262', od: 48, wall: 3 };
+            function props(role, len) { return { role: role, material: pp.material, od: pp.od, wall: pp.wall, len: len }; }
+            var src = Model.addNode(p, 0, 0, { src: true });
+            var J = Model.addNode(p, 5, 0);
+            var S1 = Model.addNode(p, 8, 0, { spr: true });
+            var S2 = Model.addNode(p, 11, 0, { spr: true });
+            Model.addSegment(p, src.id, J.id, props('main', 5));
+            Model.addSegment(p, J.id, S1.id, props('ray', 3));
+            Model.addSegment(p, S1.id, S2.id, props('ray', 3));
+            return p;
+        }
+
+        var f = Floors.create();
+        f.plans[0].project = floorPlan();
+        f.plans[0].floorsFrom = 1;
+        f.plans[0].floorsTo = 12;
+        f.sections[0].floorsFrom = 1;
+        f.sections[0].floorsTo = 12;
+
+        same('диаметр отвода берётся из плана', Floors.branchDIn(f.plans[0]), Catalog.pipe({ material: 'ГОСТ3262', od: 48, wall: 3 }).dIn);
+
+        var fr = Floors.solve(f, null);
+        var bottom = fr.floors[fr.floors.length - 1];
+        same('на нижнем этаже подобрана шайба', !!(bottom.dia && bottom.dia.ok), true);
+        near('срез равен излишку у врезки', bottom.need, bottom.excess, 1e-9);
+        near('после шайбы остаётся нужное сети этажа с небольшим избытком',
+            bottom.after, bottom.atFloor - bottom.dia.cut, 1e-12);
+        same('у диктующего этажа излишка нет', fr.dict.dia, null);
+        same('у диктующего стояка общей шайбы нет', fr.dia.risers.length, 0);
+
+        f.dia.margin = 5;
+        var margin = Floors.solve(f, null);
+        near('запас уменьшает срез на столько же',
+            margin.floors[margin.floors.length - 1].need, bottom.need - 5, 1e-9);
+        f.dia.margin = 0;
+
+        // Низкая секция: лишний напор есть у всех её этажей.
+        var low2 = Floors.addSection(f);
+        low2.floorsTo = 6;
+        low2.mainLen = f.sections[0].mainLen;
+        var twoSec = Floors.solve(f, null);
+        same('низкому стояку подобрана общая шайба', twoSec.dia.risers.length, 1);
+        same('и это именно низкая секция', twoSec.dia.risers[0].section, low2);
+
+        f.dia.riser = false;
+        same('общую шайбу на стояк можно не подбирать', Floors.solve(f, null).dia.risers.length, 0);
+        f.dia.riser = true;
+
+        section('Диафрагмы по напору общей насосной');
+
+        // ВПВ и АПТ по этажам в одной насосной: напор задаёт та, где он больше.
+        var joint = Storage.newBook();
+        var vSys = Systems.add(joint, 'vpv');
+        vSys.vpv.sections[0].floorsTo = 16;
+        var fSys = Systems.add(joint, 'floors');
+        fSys.floors.plans[0].project = floorPlan();
+        fSys.floors.plans[0].floorsFrom = 1;
+        fSys.floors.plans[0].floorsTo = 25;
+        fSys.floors.sections[0].floorsTo = 25;
+
+        var alone = Vpv.solve(vSys.vpv);
+        var floorsNeed = Floors.solve(fSys.floors, joint, true);
+        same('у АПТ по этажам напор больше', floorsNeed.pumpHead > alone.pumpHead, true);
+
+        joint.stations = [Stations.create(joint)];
+        Stations.assign(joint, joint.stations[0], vSys.id, true);
+        Stations.assign(joint, joint.stations[0], fSys.id, true);
+
+        var joined = Vpv.solve(vSys.vpv, joint);
+        near('ВПВ считается по напору насосной', joined.appliedHead, Stations.need(joint, joint.stations[0]).H, 1e-9);
+        same('свой требуемый напор сохраняется для таблицы 4', joined.pumpHead, alone.pumpHead);
+        same('о подмене напора сказано', !!joined.station, true);
+
+        var lowest = joined.marches[0].floors[joined.marches[0].floors.length - 1];
+        var lowestAlone = alone.marches[0].floors[alone.marches[0].floors.length - 1];
+        near('давление у нижнего ПК выросло на разницу напоров',
+            lowest.P - lowestAlone.P, joined.appliedHead - alone.pumpHead, 1e-9);
+        same('диафрагм стало не меньше', joined.dia.floors >= alone.dia.floors, true);
+        same('гидростатика тоже по напору насосной', joined.hydro.value > alone.hydro.value, true);
+
+        vSys.vpv.dia.station = false;
+        var off = Vpv.solve(vSys.vpv, joint);
+        near('галочку можно снять — считается по своему напору', off.appliedHead, alone.pumpHead, 1e-9);
+        same('и подсказки о насосной нет', off.station, undefined);
+        vSys.vpv.dia.station = true;
+
+        // Насосная спрашивает у систем их собственное требование — без круга.
+        var needAgain = Stations.need(joint, joint.stations[0]);
+        same('расчёт насосной не зацикливается', needAgain.parts.length, 2);
+        near('и её напор тот же', needAgain.H, joined.appliedHead, 1e-9);
+    });
+
+    guard('Чертёж DXF', function () {
+        section('DXF: объекты модели, блоки и единицы');
+
+        // Небольшой чертёж: пары «код — значение», как в файле AutoCAD.
+        function dxf(pairs) {
+            var out = [];
+            pairs.forEach(function (p) { out.push(String(p[0]), String(p[1])); });
+            return out.join('\n');
+        }
+
+        var text = dxf([
+            [0, 'SECTION'], [2, 'HEADER'],
+            [9, '$INSUNITS'], [70, 4],
+            [0, 'ENDSEC'],
+
+            [0, 'SECTION'], [2, 'BLOCKS'],
+            [0, 'BLOCK'], [2, 'MARK'], [10, 0], [20, 0],
+            [0, 'LINE'], [10, 0], [20, 0], [11, 10], [21, 0],
+            [0, 'ENDBLK'],
+            [0, 'BLOCK'], [2, '*Paper_Space'], [10, 0], [20, 0],
+            [0, 'LINE'], [10, 0], [20, 0], [11, 5], [21, 5],
+            [0, 'ENDBLK'],
+            [0, 'ENDSEC'],
+
+            [0, 'SECTION'], [2, 'ENTITIES'],
+            [0, 'LINE'], [10, 0], [20, 0], [11, 1000], [21, 0],
+            [0, 'LWPOLYLINE'], [90, 2], [70, 0], [10, 0], [20, 0], [42, 1], [10, 2000], [20, 0],
+            [0, 'CIRCLE'], [10, 500], [20, 500], [40, 250],
+            [0, 'ARC'], [10, 0], [20, 0], [40, 100], [50, 0], [51, 90],
+            [0, 'TEXT'], [10, 10], [20, 20], [40, 2.5], [1, 'Этаж 1'],
+            [0, 'INSERT'], [2, 'MARK'], [10, 100], [20, 200], [41, 2], [42, 2], [50, 90],
+            [0, 'LINE'], [67, 1], [10, 0], [20, 0], [11, 9], [21, 9],
+            [0, 'HATCH'], [10, 0], [20, 0],
+            [0, 'ENDSEC'], [0, 'EOF']
+        ]);
+
+        var d = Dxf.parse(text);
+        same('файл прочитан', d.ok, true);
+        same('единицы чертежа — миллиметры', d.unit && d.unit.name, 'мм');
+        same('штриховка пропущена и посчитана', d.skipped.HATCH, 1);
+
+        var polys = d.ents.filter(function (e) { return e.t === 'p'; });
+        var arcs = d.ents.filter(function (e) { return e.t === 'a'; });
+        var texts = d.ents.filter(function (e) { return e.t === 't'; });
+        same('дуг (окружность и дуга) — две', arcs.length, 2);
+        same('текст прочитан', texts.length && texts[0].s, 'Этаж 1');
+
+        // Объект листа (67 = 1) в модель не попал: линий — отрезок, полилиния и вставка.
+        same('линия из листа пропущена', polys.some(function (e) {
+            return e.v.length === 4 && e.v[2] === 9 && e.v[3] === 9;
+        }), false);
+        same('отрезок модели на месте', polys.some(function (e) {
+            return e.v.join(' ') === '0 0 1000 0';
+        }), true);
+
+        // Полилиния с выпуклостью 1 — полуокружность вниз от хорды.
+        var arc = polys.filter(function (e) { return e.v.length > 6; })[0];
+        var ys = [];
+        for (var i = 1; i < arc.v.length; i += 2) ys.push(arc.v[i]);
+        near('полуокружность опускается на радиус', Math.min.apply(null, ys), -1000, 0.005);
+        near('и возвращается в конец хорды', arc.v[arc.v.length - 2], 2000, 1e-6);
+
+        // Вставка: поворот 90°, масштаб 2 — отрезок блока встаёт вверх на 20.
+        var mark = polys.filter(function (e) {
+            return e.v.length === 4 && Math.abs(e.v[0] - 100) < 1e-6 && Math.abs(e.v[1] - 200) < 1e-6;
+        })[0];
+        same('вставка развёрнута в геометрию', !!mark, true);
+        if (mark) {
+            near('конец отрезка вставки по x', mark.v[2], 100, 1e-6);
+            near('конец отрезка вставки по y', mark.v[3], 220, 1e-6);
+        }
+
+        section('DXF: перевод в метры');
+        var placed = Dxf.place(d, 0.001);
+        near('ширина чертежа, м', placed.w, 2.1, 1e-9);
+        near('высота чертежа, м', placed.h, 1.75, 0.005);
+
+        var line = placed.ents.filter(function (e) {
+            return e.t === 'p' && e.v.length === 4 && Math.abs(e.v[2] - e.v[0] - 1) < 1e-9;
+        })[0];
+        same('отрезок 1000 мм стал метром', !!line, true);
+        if (line) {
+            near('начало отрезка по x от левого края', line.v[0], 0.1, 1e-9);
+            near('ось Y перевёрнута: отрезок ниже верха на 0,75 м', line.v[1], 0.75, 1e-9);
+        }
+        same('все точки внутри габарита', placed.ents.every(function (e) {
+            if (e.t !== 'p') return true;
+            for (var i = 0; i < e.v.length; i += 2) {
+                if (e.v[i] < -1e-6 || e.v[i] > placed.w + 1e-6) return false;
+                if (e.v[i + 1] < -1e-6 || e.v[i + 1] > placed.h + 1e-6) return false;
+            }
+            return true;
+        }), true);
+
+        section('DXF: чертёж и круги орошения в файле проекта');
+        var pb = Storage.newBook();
+        var pp = pb.systems[0].project;
+        pp.dxf = { name: 'plan.dxf', factor: 0.001, x: 1, y: 2, w: placed.w, h: placed.h, visible: true, ents: placed.ents };
+        var spr = Model.addNode(pp, 0, 0, { spr: true, cover: 6.5 });
+        var backBook = Storage.unpackBook(JSON.parse(JSON.stringify(pb)));
+        var backProject = backBook.systems[0].project;
+        same('чертёж сохраняется в файл', backProject.dxf && backProject.dxf.ents.length, placed.ents.length);
+        same('и его положение', backProject.dxf.x + ' ' + backProject.dxf.y, '1 2');
+        same('свой диаметр зоны орошения тоже', Model.node(backProject, spr.id).cover, 6.5);
+
+        var oldFile = { format: 'sprinkler-web', name: 'Старый', settings: { coverRadius: 2.5 }, nodes: [], segments: [] };
+        same('старый радиус круга стал диаметром', Storage.unpackBook(oldFile).systems[0].project.settings.coverDia, 5);
+
+        section('Канон: системы, цвета, слои');
+        var cb = Storage.newBook();
+        var cv = Systems.add(cb, 'vpv');
+        var cf = Systems.add(cb, 'floors');
+
+        same('у АПТ канонный синий', Canon.colorOf(cb, cb.systems[0]), '#006EDD');
+        same('у ВПВ канонный красный', Canon.colorOf(cb, cv), '#E00000');
+        same('вторая система своего ряда — другой цвет',
+            Canon.colorOf(cb, cf) !== Canon.colorOf(cb, cb.systems[0]), true);
+
+        cb.systems[0].color = '#123456';
+        same('свой цвет перекрывает канонный', Canon.colorOf(cb, cb.systems[0]), '#123456');
+        same('канонный при этом помнится', Canon.defaultColor(cb, cb.systems[0]), '#006EDD');
+        cb.systems[0].color = '';
+
+        same('слой системы', Canon.layerOf(cv), 'ВК_В2.1');
+        var cl = Canon.layers(cb);
+        same('слоёв: по системе плюс служебные', cl.length, cb.systems.length + Canon.SERVICE_LAYERS.length);
+        same('имена слоёв не повторяются', cl.length, Object.keys(cl.reduce(function (m, l) { m[l.name] = 1; return m; }, {})).length);
+        same('у каждого знака есть имя и название', Canon.BLOCKS.every(function (b) {
+            return /^ВК_[А-ЯЁ0-9_]+$/.test(b.name) && b.title && (b.ents.length || b.attrs.length);
+        }), true);
+
+        section('Выгрузка DXF: записали — прочитали');
+        var canonText = DxfWrite.build({
+            layers: Canon.layers(cb),
+            blocks: Canon.BLOCKS,
+            entities: Canon.templateEntities(cb)
+        });
+
+        same('файл собран', canonText.length > 10000, true);
+        var back = Dxf.parse(canonText);
+        same('свой же разбор его читает', back.ok, true);
+        same('объекты листа прочитались', back.ents.length > 100, true);
+
+        // Слои, цвета и блоки — через повторный разбор пар «код — значение».
+        function pairs(text, section) {
+            var lines = text.split(/\r\n|\n/);
+            var out = [];
+            var inSec = false, cur = '';
+            for (var i = 0; i + 1 < lines.length; i += 2) {
+                var code = Number(lines[i]), val = lines[i + 1];
+                if (code === 0 && val === 'SECTION') cur = '?';
+                if (code === 2 && cur === '?') { cur = val; inSec = val === section; }
+                if (code === 0 && val === 'ENDSEC') inSec = false;
+                if (inSec) out.push({ c: code, v: val });
+            }
+            return out;
+        }
+
+        var tbl = pairs(canonText, 'TABLES');
+        var names = [];
+        var colors = {};
+        var last = '';
+        tbl.forEach(function (p, i) {
+            if (p.c === 0) last = p.v;
+            if (last === 'LAYER' && p.c === 2) names.push(p.v);
+            if (last === 'LAYER' && p.c === 62) colors[names[names.length - 1]] = Number(p.v);
+        });
+        same('в файле все слои канона', names.length >= cl.length, true);
+        same('слой системы ВПВ есть', names.indexOf('ВК_В2.1') >= 0, true);
+        same('у красной системы индекс ACI 1', colors['ВК_В2.1'], 1);
+        same('зелёный водопровод не стал красным', colors['ВК_В2'] !== 1, true);
+
+        var blk = pairs(canonText, 'BLOCKS');
+        var bnames = [];
+        var lastB = '';
+        blk.forEach(function (p) {
+            if (p.c === 0) lastB = p.v;
+            if (lastB === 'BLOCK' && p.c === 2) bnames.push(p.v);
+        });
+        same('блоки записаны все', bnames.length, Canon.BLOCKS.length);
+        same('задвижка среди них', bnames.indexOf('ВК_ЗАДВИЖКА') >= 0, true);
+
+        var ents = pairs(canonText, 'ENTITIES');
+        var inserts = 0, attribs = 0, lastE = '';
+        ents.forEach(function (p) {
+            if (p.c === 0) { lastE = p.v; if (p.v === 'INSERT') inserts++; if (p.v === 'ATTRIB') attribs++; }
+        });
+        same('знаки вставлены по одному на клетку', inserts, Canon.BLOCKS.length);
+        same('атрибуты вышли значениями', attribs > 10, true);
+
+        section('Схема: лист насосной станции из расчёта');
+        var sb = Storage.newBook();
+        var sv = Systems.add(sb, 'vpv');          // ВПВ требует напор — ей нужна насосная
+        var empty = Scheme.station(sb);
+        same('пустой АПТ насосной не требует', empty.owners, 1);
+
+        var sheet = Scheme.station(sb);
+        var names = sheet.ents.filter(function (e) { return e.t === 'ins'; }).map(function (e) { return e.name; });
+        same('на листе есть насос', names.indexOf('ВК_НАСОС') >= 0, true);
+        same('и жокей, пока он включён', names.indexOf('ВК_ЖОКЕЙ') >= 0, true);
+
+        sv.jockey = false;
+        same('жокей снят — и со схемы тоже',
+            Scheme.station(sb).ents.filter(function (e) { return e.t === 'ins' && e.name === 'ВК_ЖОКЕЙ'; }).length, 0);
+        sv.jockey = true;
+
+        // Числа на листе — из расчёта, не из воздуха.
+        var vres = Vpv.solve(sv.vpv);
+        var texts = sheet.ents.filter(function (e) { return e.t === 'txt'; }).map(function (e) { return e.s; }).join(' | ');
+        same('подпись модуля несёт напор насосной',
+            texts.indexOf('H = ' + Fmt.num(vres.pumpHead, 2) + ' м') >= 0, true);
+
+        var callouts = sheet.ents.filter(function (e) { return e.t === 'ins' && e.name === 'ВК_ВЫНОСКА'; });
+        same('у каждого стояка выноска', callouts.length, 1);
+        same('в выноске расчётный расход', callouts[0].attrs['Q'], 'Q = ' + Fmt.num(vres.dict.Q, 2) + ' л/с');
+        same('и диаметр стояка', callouts[0].attrs['ДУ'], 'Ду' + Catalog.find(sv.vpv.riser.material, sv.vpv.riser.od, sv.vpv.riser.wall).dn);
+
+        // Насосная объединила системы — модуль стал один, стояков в нём больше.
+        var st = Stations.create(sb);
+        sb.stations.push(st);
+        sb.systems.forEach(function (s) { Stations.assign(sb, st, s.id, true); });
+        var joined = Scheme.station(sb);
+        same('модуль на насосную, а не на систему', joined.owners, 1);
+        same('стояков столько, сколько систем в насосной',
+            joined.ents.filter(function (e) { return e.t === 'ins' && e.name === 'ВК_ВЫНОСКА'; }).length, sb.systems.length);
+        same('лист стал шире', joined.width > sheet.width, true);
+
+        section('Гарантированный напор — из расчёта, а не отдельным полем');
+        var gb = Storage.newBook();
+        var gv = Systems.add(gb, 'vpv');
+        gb.systems[0].project.settings.guaranteed = 26;
+        gv.vpv.inlet.guaranteed = 26;
+        gb.text.guaranteed = 39;            // старое поле записки — больше не в ходу
+
+        same('Нгар берётся из систем', Tch.guaranteed(gb).value, 26);
+        same('и замечаний нет, пока он один', Tch.dataWarnings(gb).length, 0);
+        same('в записке тот же напор', TchText.build(gb, gb.text).some(function (b) {
+            return b.type === 'p' && b.text.indexOf('напором 26,00 м') >= 0;
+        }), true);
+        same('на схеме тот же', Scheme.station(gb).ents.some(function (e) {
+            return e.t === 'txt' && e.s === 'Нгар = 26,00 м';
+        }), true);
+
+        gv.vpv.inlet.guaranteed = 31;
+        same('разный Нгар у систем — замечание',
+            /Гарантированный напор у систем разный: 26,00, 31,00/.test(Tch.dataWarnings(gb).join(' ')), true);
+        same('на листе остаётся меньший', Tch.guaranteed(gb).value, 26);
+
+        section('Тип установки: задаётся на стояке, виден в записке');
+        var kb = Storage.newBook();
+        var kf = Systems.add(kb, 'floors');
+        Floors.addPlan(kf.floors);
+
+        same('по умолчанию водозаполненная',
+            kf.floors.plans[0].project.settings.systemKind, 'водозаполненная');
+
+        // Форма стояка раздаёт тип всем планам — как это делает FloorsUI.
+        kf.floors.plans.forEach(function (p) { p.project.settings.systemKind = 'воздухозаполненная'; });
+        var kinds = kf.floors.plans.map(function (p) { return p.project.settings.systemKind; });
+        same('тип един для всех планов', kinds.join('|'), 'воздухозаполненная|воздухозаполненная');
+
+        var unit = Tch.unitTable(Tch.systems(kb), kb.text).filter(function (r) { return r[0].indexOf('В2') >= 0 || true; });
+        same('в таблице оборудования он же', unit.some(function (r) { return r[1] === 'воздухозаполненная'; }), true);
+
+        kf.floors.plans.forEach(function (p) { p.project.settings.systemKind = 'водозаполненная'; });
+        same('вернули — и в таблице вернулось',
+            Tch.unitTable(Tch.systems(kb), kb.text).some(function (r) { return r[1] === 'водозаполненная'; }), true);
+
+        section('ВПВ по плану: воздушное пожаротушение паркинга');
+
+        // Магистраль 76×3 (Ду 65, Kт = 554,57) длиной 10 м от ввода до крана.
+        // Кран берёт две струи по 3,5 л/с и 10 м у клапана — из исходных данных.
+        var pb = Storage.newBook();
+        var pv = Systems.add(pb, 'vpvplan');
+        var pj = pv.project;
+        var ps = pj.settings;
+
+        same('код как у ВПВ', pv.code, 'В2.1');
+        same('расчётные точки — краны', ps.planKind, 'vpv');
+        same('раздельная система паркинга воздушная', ps.systemKind, 'воздухозаполненная');
+        same('две струи по умолчанию', ps.pkJets, 2);
+
+        var pSrc = Model.addNode(pj, 0, 0, { src: true });
+        var pPk = Model.addNode(pj, 10, 0, { pk: {} });
+        var pMain = Model.addSegment(pj, pSrc.id, pPk.id,
+            { role: 'main', material: 'ГОСТ10704', od: 76, wall: 3, len: 10 });
+
+        var pnet = Solver.solve(pj);
+        var pcalc = Calc.build(pj, pnet);
+        /*
+            Внутреннее пожаротушение считается как ВПВ: потери по Дарси–Вейсбаху,
+            λ по Шевелеву для неновых труб, расчётный диаметр dр = d − 1 мм.
+            Считаем ожидаемое вручную: 76×3 → d 70 мм, dр 69 мм, Q 7 л/с.
+        */
+        var pD = (70 - 1) / 1000;
+        var pV = 7 / 1000 / (Math.PI * pD * pD / 4);
+        var pLam = 0.021 / Math.pow(pD, 0.3);               // V ≥ 1,2 м/с
+        var pRaw = pLam * 10 / pD * pV * pV / (2 * 9.81);
+
+        same('расчёт собрался', pcalc.ok, true);
+        same('диктует пожарный кран', pcalc.head.dictKind, 'pk');
+        same('ороситель для расчёта не нужен', pcalc.checks.working, 0);
+        near('расход системы — две струи', pnet.Qtotal, 7);
+        near('потери по магистрали — по Шевелеву, а не через Kт', pnet.HnetRaw, pRaw);
+        near('скорость по расчётному диаметру', pnet.S[pMain.id].V, pV);
+        near('λ по Шевелеву', pnet.S[pMain.id].lambda, pLam);
+        near('Нпк — давление у клапана', pcalc.head.Hfree, 10);
+        same('узла управления в требуемом напоре нет', pcalc.head.Hcu, 0);
+        // Своя геометрия: Нгеом считается от отметки клапана ПК, не от оросителей.
+        same('отметка клапана ПК своя', ps.pkElev, 1.35);
+        near('Нгеом — от клапана ПК до ввода', pcalc.head.Hgeom, 1.35 - (-3.6));
+        near('Нтр = Нгеом + Ннас + Нсети + Нпк', pcalc.head.Hreq, 4.95 + 3 + pRaw * 1.2 + 10);
+        near('Ннас = Нтр − Нгар', pcalc.head.HpumpReq, pcalc.head.Hreq - 26);
+
+        /*
+            Кран со своей отметкой приводится к расчётной: клапан на 2 м выше
+            требует на эти 2 м больше напора в расчётной плоскости.
+        */
+        pPk.pk.elev = 3.35;
+        var pHigh = Calc.build(pj, Solver.solve(pj));
+        near('кран выше расчётной отметки требует больше', pHigh.head.Hfree, 12);
+        near('и Нгеом не поехал', pHigh.head.Hgeom, 4.95);
+        near('давление у клапана осталось требуемым', pHigh.hydrants[0].valve, 10);
+        pPk.pk.elev = null;
+
+        var pVol = Math.PI * 0.07 * 0.07 / 4 * 10;
+        near('объём незаполненных водой трубопроводов, м³', pcalc.air.volume, pVol);
+        near('время подачи воды в диктующий кран, с', pcalc.air.fill, pVol * 1000 / 7);
+        same('в пределах 1 м³ и 30 с замечаний по п. 8.4 нет',
+            pcalc.warnings.filter(function (w) { return w.indexOf('8.4') >= 0; }).length, 0);
+
+        // Нарисовали всю магистраль разом — объём и время выходят за п. 8.4.
+        pMain.len = 400;
+        var pLong = Calc.build(pj, Solver.solve(pj));
+        same('объём больше 1 м³ — замечание',
+            /Объём незаполненных водой трубопроводов 1539 л/.test(pLong.warnings.join(' ')), true);
+        same('и время подачи больше 30 с',
+            /Вода придёт в диктующий ПК за 220 с/.test(pLong.warnings.join(' ')), true);
+
+        /*
+            В записке от п. 8.4 остаётся только объём: время подачи воды смотрят
+            в расчёте и в приложении. А объём записка не вправе назвать
+            допустимым, когда расчёт дал больше: обещание о разделении сети
+            снимается, и о том же предупреждает замечание книги.
+        */
+        var pOver = TchText.build(pb, pb.text).filter(function (x) { return x.type === 'p'; })
+            .map(function (x) { return x.text; });
+        same('в записке объём и его предел',
+            pOver.some(function (x) {
+                return x.indexOf('Система В2.1: объём незаполненных водой трубопроводов — 1539 л '
+                    + '(больше предельного 1 м³), п. 8.4 СП 10.13130.2020.') >= 0;
+            }), true);
+        same('времени подачи воды в записке нет',
+            pOver.some(function (x) { return x.indexOf('вода поступает в диктующий') >= 0; }), false);
+        same('обещание о разделении сети снято',
+            pOver.some(function (x) { return x.indexOf('разделены на тупиковые ветки') >= 0; }), false);
+        same('замечание книги предупреждает',
+            /Система В2\.1: объём 1539 л больше 1 м³, вода идёт в диктующий ПК 220 с вместо 30 с/
+                .test(Tch.dataWarnings(pb).join(' ')), true);
+
+        var pOverHtml = Report.html({ project: pj, net: Solver.solve(pj), calc: pLong });
+        same('в приложении про объём и время по-прежнему ни слова',
+            pOverHtml.indexOf('незаполненных водой трубопроводов') >= 0, false);
+
+        // Число у самого предела печатается с десятичной: «за 30 с, больше 30 с» не выйдет.
+        pMain.len = 55;
+        same('у самого предела берётся десятичная',
+            /вода идёт в диктующий ПК 30,2 с вместо 30 с/.test(Tch.dataWarnings(pb).join(' ')), true);
+        same('а записка при допустимом объёме обещание оставляет',
+            TchText.build(pb, pb.text).some(function (x) {
+                return x.type === 'p' && x.text.indexOf('разделены на тупиковые ветки') >= 0;
+            }), true);
+
+        pMain.len = 10;
+
+        // В записке система идёт вместе со стояками ВПВ, а не с АПТ.
+        var pdata = Tch.systems(pb);
+        same('в таблице внутреннего пожаротушения', pdata.vpv.length, 1);
+        same('в автоматическом пожаротушении её нет', pdata.apt.length, 1);
+
+        var prow = Tch.vpvTable(pdata, pb.text)[0];
+        same('струи и расход ствола из исходных данных', prow[1], '2 × 3,5 л/с');
+        same('ствол и рукав в таблице', prow[3] + '/' + prow[4] + '/' + prow[5], '19/65/20');
+        same('давление у диктующего крана в МПа', prow[6], Fmt.trim(10 / 100, 3));
+
+        same('у расчёта по плану своё приложение',
+            Appendix.numbers(pb)['apt:' + pv.id] !== undefined, true);
+
+        var phtml = Report.html({ project: pj, net: pnet, calc: pcalc });
+        same('в приложении нет строки про узел управления', phtml.indexOf('Нуу') >= 0, false);
+        same('зато есть Нпк', phtml.indexOf('Нтр = Нгеом + Ннас + Нсети + Нпк, где') >= 0, true);
+        // В сумме ровно те слагаемые, что в формуле: нулевого Нуу в ней нет.
+        same('в сумме нет нулевого Нуу',
+            phtml.indexOf('Нтр = ' + Fmt.num(4.95, 2) + ' + 3,00 + ' + Fmt.num(pRaw * 1.2, 2) + ' + 10,00 = ') >= 0, true);
+        same('названа формула потерь', /λ — коэффициент гидравлического трения по формуле Шевелева/.test(phtml), true);
+        same('в приложении нет объёма и времени заполнения',
+            phtml.indexOf('Система воздушная') >= 0 || phtml.indexOf('незаполненных водой трубопроводов') >= 0, false);
+
+        // У кранов расход задан: приводить луч к узлу не к чему.
+        same('столбцы таблицы — λ и Re', Report.headOf(pj).slice(2, 4).join('/'), 'Коэф. трения λ/Re');
+        same('приведения луча в таблице нет', /√\(/.test(phtml), false);
+        same('и в строках расчёта тоже',
+            pcalc.rows.some(function (r) { return r.type === 'summary' && r.sp; }), false);
+
+        same('записка учитывает объём системы', TchText.build(pb, pb.text).some(function (b) {
+            return b.type === 'p' && b.text.indexOf('Система В2.1: объём незаполненных водой трубопроводов — 38 л') >= 0;
+        }), true);
+
+        /*
+            Систему рисуют целиком, а работает расчётное число струй — по струе
+            у самых невыгодных кранов. Добавим второй кран ближе к вводу: расход
+            системы не меняется, а объём растёт на его подводку.
+        */
+        var pNear = Model.addNode(pj, 4, 3, { pk: {} });
+        Model.addSegment(pj, pSrc.id, pNear.id,
+            { role: 'ray', material: 'ГОСТ10704', od: 76, wall: 3, len: 5 });
+
+        var pnet2 = Solver.solve(pj);
+        var pcalc2 = Calc.build(pj, pnet2);
+        var pFar = pcalc2.hydrants.filter(function (k) { return k.id === pPk.id; })[0];
+        var pClose = pcalc2.hydrants.filter(function (k) { return k.id === pNear.id; })[0];
+
+        same('две струи — по струе на кран', pFar.jets + ':' + pClose.jets, '1:1');
+        near('расход системы не изменился', pnet2.Qtotal, 7);
+        same('диктует дальний кран', pnet2.dict, pPk.id);
+        near('объём вырос на подводку ближнего крана',
+            pcalc2.air.volume, Math.PI * 0.07 * 0.07 / 4 * 15);
+        // Третий кран у самого ввода: струй ему не достаётся — он только объём.
+        var pNear2 = Model.addNode(pj, 2, -3, { pk: {} });
+        Model.addSegment(pj, pSrc.id, pNear2.id,
+            { role: 'ray', material: 'ГОСТ10704', od: 76, wall: 3, len: 3 });
+
+        var pcalcF = Calc.build(pj, Solver.solve(pj));
+        same('работают две струи из трёх кранов',
+            pcalcF.hydrants.map(function (k) { return k.name + ':' + k.jets; }).join(' '), 'ПК-1:1 ПК-2:1 ПК-3:0');
+        same('закрытый кран помечен', pcalcF.hydrants[2].working, false);
+        same('замечаний по закрытому крану нет',
+            pcalcF.warnings.filter(function (w) { return w.indexOf('ПК-3') >= 0; }).length, 0);
+        near('а его подводка в объёме есть', pcalcF.air.volume, Math.PI * 0.07 * 0.07 / 4 * 18);
+
+        Model.removeNode(pj, pNear2.id);
+
+        // Три струи на два крана: дальний берёт две, ближний — одну.
+        ps.pkJets = 3;
+        var pcalc3 = Calc.build(pj, Solver.solve(pj));
+        same('струи расходятся по невыгодности',
+            pcalc3.hydrants.map(function (k) { return k.name + ':' + k.jets; }).join(' '), 'ПК-1:2 ПК-2:1');
+        ps.pkJets = 2;
+
+        // Своё число струй у крана расчёт не трогает: такой кран работает всегда.
+        pNear.pk.jets = 1;
+        var pcalc4 = Calc.build(pj, Solver.solve(pj));
+        same('заданный кран работает со своими струями',
+            pcalc4.hydrants.map(function (k) { return k.name + ':' + k.jets; }).join(' '), 'ПК-1:1 ПК-2:1');
+        pNear.pk.jets = null;
+
+        /*
+            Расчётные краны назначаются руками: «не в расчёте» убирает кран
+            совсем, «в расчёте» ставит его в расчётный случай, а остаток струй
+            расчёт раскладывает сам.
+        */
+        pPk.pk.use = false;
+        var pPick = Calc.build(pj, Solver.solve(pj));
+        same('исключённый кран в расчёт не идёт',
+            pPick.hydrants.map(function (k) { return k.name + ':' + k.jets; }).join(' '), 'ПК-1:0 ПК-2:2');
+        same('и диктует оставшийся', pPick.head.dictName, 'ПК-2');
+        near('расход тот же — две струи', Solver.solve(pj).Qtotal, 7);
+        same('исключение видно в таблице кранов', pPick.hydrants[0].use, false);
+
+        pPk.pk.use = null;
+        pNear.pk.use = true;
+        var pPick2 = Calc.build(pj, Solver.solve(pj));
+        same('назначенный кран работает',
+            pPick2.hydrants.map(function (k) { return k.name + ':' + k.jets; }).join(' '), 'ПК-1:1 ПК-2:1');
+        same('и помечен как принятый в расчёт', pPick2.hydrants[1].use, true);
+        same('в приложении так и написано',
+            /работает 2 стр\. у принятых в расчёт кранов/.test(Report.html({
+                project: pj, net: Solver.solve(pj), calc: pPick2
+            })), true);
+
+        // Назначили больше струй, чем положено, — расчёт об этом говорит.
+        pPk.pk.jets = 2;
+        same('перебор струй — замечание',
+            /Назначено 3 стр\. — больше расчётных 2 стр\./.test(Solver.solve(pj).warnings.join(' ')), true);
+        pPk.pk.jets = null;
+
+        // Исключили все краны — расчёту не с чем работать, и он это говорит.
+        pPk.pk.use = false;
+        pNear.pk.use = false;
+        same('все краны исключены — понятная ошибка',
+            /Ни один пожарный кран не принят в расчётный случай/.test(Solver.solve(pj).errors.join(' ')), true);
+        pPk.pk.use = null;
+        pNear.pk.use = null;
+
+        // Напора не хватает — нужна насосная: в письме система идёт как ВПВ.
+        ps.guaranteed = 5;
+        same('состав насосной — ВПВ, а не АПТ',
+            Request.title(Request.stations(pb)[0]), 'В2.1 ВПВ — система внутреннего пожаротушения');
+        same('на схеме у стояка вместо узла управления сигнализатор потока',
+            Scheme.station(pb).ents.some(function (e) {
+                return e.t === 'ins' && e.name === 'ВК_СИГНАЛИЗАТОР_ПОТОКА';
+            }), true);
+        ps.guaranteed = 26;
+
+        pNear.pk.use = true;
+        var pBack = Storage.unpackBook(JSON.parse(JSON.stringify(pb)));
+        var pSysBack = pBack.systems.filter(function (x) { return x.kind === 'vpvplan'; })[0];
+        same('назначенные краны переживают сохранение',
+            pSysBack.project.nodes.filter(function (n) { return n.pk; })
+                .map(function (n) { return n.pk.use === true ? 'в расчёте' : n.pk.use === false ? 'нет' : 'авто'; })
+                .join('/'), 'авто/в расчёте');
+        pNear.pk.use = null;
+        same('система переживает сохранение',
+            pSysBack.project.settings.planKind + '/' + pSysBack.project.settings.systemKind,
+            'vpv/воздухозаполненная');
+        near('и считается так же', Solver.solve(pSysBack.project).Qtotal, 7);
+
+        section('Задание для ЭЛ и СС');
+
+        /*
+            Задание собирается из книги: марки и мощности — из каталожных листов,
+            узлы управления и краны — из систем. Логика работы идёт в описание:
+            её читают слаботочники.
+        */
+        var tb = Storage.newBook();
+        var tApt = tb.systems[0];
+        var tVpv = Systems.add(tb, 'vpv');
+        tApt.project.settings.guaranteed = 5;
+        tVpv.vpv.inlet.guaranteed = 5;
+
+        var tSrc = Model.addNode(tApt.project, 0, 0, { src: true });
+        var tJoint = Model.addNode(tApt.project, 6, 0);
+        var tSpr = Model.addNode(tApt.project, 6, 3, { spr: true });
+        Model.addSegment(tApt.project, tSrc.id, tJoint.id, { role: 'main' });
+        Model.addSegment(tApt.project, tJoint.id, tSpr.id, { role: 'ray' });
+
+        tb.object.name = 'ЖК Щербакова';
+        tb.object.code = '66-ЩЕР.120-ИОС2.3';
+        tb.text.pumps = [
+            { id: tApt.id, role: 'main', name: 'WILO CO 2 BL 65/160-11/2', power: '11', count: '1 раб., 1 рез.' },
+            { id: tApt.id, role: 'jockey', name: 'WILO CO-1 Helix V 605/J-ET', power: '1,1', count: '1 раб.' },
+            { id: tVpv.id, role: 'main', name: 'ANTARUS 2 MLV22-4/01', power: '7,5', count: '1 раб., 1 рез.' },
+            { id: tVpv.id, role: 'jockey', name: 'ANTARUS 1 MLV3-9/01/J', power: '1,1', count: '1 раб.' }
+        ];
+        tb.task.room = '98 (насосная ПТ, подвал)';
+
+        var tRows = Task.rows(tb);
+        function byCat(list, name) {
+            return list.filter(function (r) { return r.category === name; });
+        }
+
+        same('насосных станций — по одной на систему', byCat(tRows, 'Насосная станция').length, 2);
+        same('марка и мощность — из каталожного листа',
+            byCat(tRows, 'Насосная станция')[0].name + '/' + byCat(tRows, 'Насосная станция')[0].power,
+            'WILO CO 2 BL 65/160-11/2/11');
+        same('рабочие и резервные разобраны из «1 раб., 1 рез.»',
+            byCat(tRows, 'Насосная станция')[0].work + '+' + byCat(tRows, 'Насосная станция')[0].reserve, '1+1');
+        same('жокеи тоже в задании', byCat(tRows, 'Жокей-насос').length, 2);
+        same('номер помещения насосной раздался позициям',
+            byCat(tRows, 'Насосная станция')[0].room, '98 (насосная ПТ, подвал)');
+        same('задвижки на вводе — две', byCat(tRows, 'Электрифицированная задвижка')[0].work, 2);
+        same('узел управления взят из исходных данных',
+            byCat(tRows, 'Узел управления')[0].name, 'Прямоточный Ду150');
+        same('пожарные краны посчитаны по этажам стояка',
+            byCat(tRows, 'Пожарный кран с датчиком положения')[0].work > 0, true);
+        same('табло и связь в задании есть',
+            byCat(tRows, 'Табло «Насосная станция пожаротушения»').length
+            + byCat(tRows, 'Телефонная связь').length, 2);
+
+        // Логика работы — то, ради чего задание читает СС.
+        var tText = byCat(tRows, 'Насосная станция')[0].note;
+        same('в описании есть жокей и 0,05 МПа', /жокей-насос[\s\S]*0,05 МПа/.test(tText), true);
+        same('и резервный насос через 20 с', /через 20 с/.test(tText), true);
+        same('и сигналы дежурному персоналу', /дежурного персонала/.test(tText), true);
+        same('у ВПВ — пуск от кнопок у пожарных кранов',
+            /кнопок\s+ручного пуска/.test(byCat(tRows, 'Насосная станция')[1].note), true);
+        same('у АПТ — импульс от сигнализаторов давления',
+            /сигнализаторы давления/.test(tText), true);
+
+        // Правки человека расчёт не затирает, а снятая позиция уходит.
+        tb.task.rows['cu'] = { name: 'УУ-С150/1,6В-ВФ.О4', code: 'У.У-В2-01' };
+        var tEdited = Task.rows(tb);
+        same('вписанная марка узла управления осталась',
+            byCat(tEdited, 'Узел управления')[0].name, 'УУ-С150/1,6В-ВФ.О4');
+        same('и проектный номер тоже', byCat(tEdited, 'Узел управления')[0].code, 'У.У-В2-01');
+
+        tb.task.rows['phone'] = { off: true };
+        same('снятая позиция в задание не идёт',
+            byCat(Task.rows(tb), 'Телефонная связь').length, 0);
+        tb.task.rows = {};
+
+        // Без каталожного листа задание само говорит, чего не хватает.
+        tb.text.pumps = [];
+        same('нет марки — замечание',
+            /не задана марка/.test(Task.warnings(tb).join(' ')), true);
+        tb.text.pumps = [
+            { id: tApt.id, role: 'main', name: 'WILO CO 2 BL 65/160-11/2', power: '11', count: '1 раб., 1 рез.' },
+            { id: tApt.id, role: 'jockey', name: 'WILO CO-1 Helix V 605/J-ET', power: '1,1', count: '1 раб.' },
+            { id: tVpv.id, role: 'main', name: 'ANTARUS 2 MLV22-4/01', power: '7,5', count: '1 раб., 1 рез.' },
+            { id: tVpv.id, role: 'jockey', name: 'ANTARUS 1 MLV3-9/01/J', power: '1,1', count: '1 раб.' }
+        ];
+
+        section('Задание: книга Excel по бланку');
+
+        var tSheets = TaskForm.sheets(tb, tRows);
+        same('листов два: задание и данные', tSheets.map(function (s) { return s.name; }).join('/'),
+            'Задание от АПТ для ЭЛ и СС/Данные');
+
+        var tGrid = tSheets[0].grid;
+        function cellAt(row, col) {
+            var line = tGrid[row - 1] || [];
+            var v = line[col - 1];
+            return v && typeof v === 'object' ? v.v : v;
+        }
+
+        same('заголовок бланка на месте', cellAt(2, 2), 'Задание от АПТ для ЭЛ и СС');
+        same('объект в шапке', cellAt(3, 2), 'Объект: ЖК Щербакова');
+        same('шифр в шапке', cellAt(4, 7), 'Шифр: 66-ЩЕР.120-ИОС2.3');
+        same('шапка таблицы двухъярусная', cellAt(10, 5) + '/' + cellAt(11, 5),
+            'Оборудование требующее подключения/Категория оборудования');
+        same('первая позиция с тринадцатой строки', cellAt(13, 5), 'Насосная станция');
+        same('общее количество — сумма рабочих и резервных', cellAt(13, 10), 2);
+        same('мощность числом', cellAt(13, 11), 11);
+        same('объединения шапки выгружаются', tSheets[0].merges.indexOf('E10:G10') >= 0, true);
+        same('списки для ячеек — с листа «Данные»',
+            /Данные/.test(tSheets[0].validations[0].list), true);
+        same('высота строки под описание посчитана', tSheets[0].heights[13] > 60, true);
+
+        // Лист «Данные»: из него выбирают категорию, диспетчеризацию и протокол.
+        same('категории на листе данных', tSheets[1].grid[1][0], Task.CATEGORIES[0]);
+        same('диспетчеризация да/нет', tSheets[1].grid[1][1] + '/' + tSheets[1].grid[2][1], 'Да/Нет');
+
+        section('Задание: заполнение бланка бюро');
+
+        /*
+            Бланк заполняется, а не перерисовывается: его строки, стили и
+            формулы остаются на месте, меняются только значения. Собираем
+            маленький бланк той же раскладки и проверяем на нём.
+        */
+        (function () {
+            function cellXml(ref, style, value) {
+                return '<c r="' + ref + '" s="' + style + '">' + (value === undefined ? '' : '<v>' + value + '</v>') + '</c>';
+            }
+
+            var sheet = '<?xml version="1.0" encoding="UTF-8"?>'
+                + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                + '<row r="3"><c r="B3" s="7" t="s"><v>0</v></c></row>'
+                + '<row r="13" ht="300" customHeight="1">'
+                + cellXml('B13', 17, 1) + cellXml('D13', 15) + cellXml('E13', 16) + cellXml('F13', 15)
+                + cellXml('G13', 22) + cellXml('H13', 12, 1) + cellXml('I13', 14, 1)
+                + '<c r="J13" s="32"><f t="shared" ref="J13:J14" si="0">H13+I13</f><v>2</v></c>'
+                + cellXml('K13', 43, 7.5) + cellXml('P13', 32)
+                + '</row>'
+                + blankRows(14, 25)
+                + '</sheetData></worksheet>';
+
+            // Пустые строки бланка: номер, формула «Общее» и прочерки.
+            function blankRows(from, to) {
+                var out = '';
+                for (var r = from; r <= to; r++) {
+                    out += '<row r="' + r + '" ht="30"><c r="B' + r + '" s="17"><v>' + (r - 12) + '</v></c>'
+                        + '<c r="J' + r + '" s="32"><f t="shared" si="0"/><v>0</v></c></row>';
+                }
+                return out;
+            }
+
+            var files = [
+                { name: '[Content_Types].xml', text: '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>' },
+                { name: 'xl/workbook.xml', text: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    + 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    + '<sheets><sheet name="Задание" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029"/></workbook>' },
+                { name: 'xl/_rels/workbook.xml.rels', text: '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    + '</Relationships>' },
+                { name: 'xl/worksheets/sheet1.xml', text: sheet }
+            ];
+
+            var blank = Zip.create(files);
+            var fb = Storage.newBook();
+            var fApt = fb.systems[0];
+            fApt.project.settings.guaranteed = 5;
+            var fSrc = Model.addNode(fApt.project, 0, 0, { src: true });
+            var fJoint = Model.addNode(fApt.project, 6, 0);
+            var fSpr = Model.addNode(fApt.project, 6, 3, { spr: true });
+            Model.addSegment(fApt.project, fSrc.id, fJoint.id, { role: 'main' });
+            Model.addSegment(fApt.project, fJoint.id, fSpr.id, { role: 'ray' });
+
+            fb.object.name = 'ЖК Щербакова';
+            fb.text.pumps = [{ id: fApt.id, role: 'main', name: 'ANTARUS 2 MLV22-4/01', power: '7,5', count: '1 раб., 1 рез.' }];
+            fb.task.room = '98 (насосная ПТ, подвал)';
+            fb.task.template = { name: 'бланк.xlsx', data: Zip.toBase64(blank) };
+
+            TaskForm.check(blank).then(function (info) {
+                same('лист задания в бланке найден', info.path, 'xl/worksheets/sheet1.xml');
+                return TaskForm.fill(fb, Task.rows(fb));
+            }).then(function (bytes) {
+                return Zip.read(bytes.buffer);
+            }).then(function (zip) {
+                var xml = Zip.decode(zip.map['xl/worksheets/sheet1.xml'].bytes);
+                var head = Zip.decode(zip.map['xl/workbook.xml'].bytes);
+
+                same('объект подставлен в шапку', /<c r="B3"[^>]*><is><t[^>]*>Объект: ЖК Щербакова</.test(xml), true);
+                same('марка из каталожного листа в бланке',
+                    /<c r="F13"[^>]*><is><t[^>]*>ANTARUS 2 MLV22-4\/01</.test(xml), true);
+                same('стиль ячейки бланка не тронут', /<c r="F13" s="15"/.test(xml), true);
+                same('формула «Общее» осталась формулой бланка', /<f t="shared" ref="J13:J14" si="0">H13\+I13<\/f>/.test(xml), true);
+                same('номер позиции бланк ведёт сам', /<c r="B13" s="17"><v>1<\/v><\/c>/.test(xml), true);
+                same('высота строки пошла за описанием', / ht="300"/.test(xml), false);
+                // Позиций восемь: строки 21 и ниже бланка остались свободными.
+                same('свободная строка осталась, но без высоты бланка',
+                    /<row r="22"[^>]*>/.test(xml) && !/<row r="22"[^>]*ht=/.test(xml), true);
+                same('и её номер бланк ведёт сам', /<c r="B22" s="17"><v>10<\/v><\/c>/.test(xml), true);
+                same('книге велено пересчитаться при открытии', /fullCalcOnLoad="1"/.test(head), true);
+            }).catch(function (e) {
+                report('Заполнение бланка: исключение', false, e && e.message ? e.message : String(e), '—');
+            });
+
+            /*
+                Бланк бюро встроен в программу: задание уходит в форму и тогда,
+                когда свой бланк в книгу не загружали.
+            */
+            var nb = Storage.newBook();
+            var nApt = nb.systems[0];
+            nApt.project.settings.guaranteed = 5;
+            var nSrc = Model.addNode(nApt.project, 0, 0, { src: true });
+            var nJoint = Model.addNode(nApt.project, 6, 0);
+            var nSpr = Model.addNode(nApt.project, 6, 3, { spr: true });
+            Model.addSegment(nApt.project, nSrc.id, nJoint.id, { role: 'main' });
+            Model.addSegment(nApt.project, nJoint.id, nSpr.id, { role: 'ray' });
+            nb.object.name = 'ЖК Щербакова';
+            nb.text.pumps = [{ id: nApt.id, role: 'main', name: 'ANTARUS 2 MLV22-4/01', power: '7,5', count: '1 раб., 1 рез.' }];
+
+            same('бланк бюро встроен в программу', TaskForm.blankOf(nb) === TaskBlank, true);
+            same('свой бланк перебивает встроенный',
+                TaskForm.blankOf({ task: { template: { name: 'мой.xlsx', data: 'AAA' } } }).name, 'мой.xlsx');
+
+            TaskForm.fill(nb, Task.rows(nb)).then(function (bytes) {
+                return Zip.read(bytes.buffer);
+            }).then(function (zip) {
+                var xml = Zip.decode(zip.map['xl/worksheets/sheet1.xml'].bytes);
+
+                same('во встроенном бланке три листа бюро',
+                    Object.keys(zip.map).filter(function (n) { return /^xl\/worksheets\/sheet\d+\.xml$/.test(n); }).length, 3);
+                same('подсказки бюро в ячейках остались', !!zip.map['xl/comments1.xml'], true);
+                same('объект подставлен', /<c r="B3"[^>]*><is><t[^>]*>Объект: ЖК Щербакова</.test(xml), true);
+                same('марка насосной подставлена', /ANTARUS 2 MLV22-4\/01/.test(xml), true);
+                same('прежнее задание из бланка стёрто', /Жилой комплекс, состоящий/.test(xml), false);
+            }).catch(function (e) {
+                report('Встроенный бланк: исключение', false, e && e.message ? e.message : String(e), '—');
+            });
+        })();
+
+        section('Письмо на подбор насосов');
+        var mb = Storage.newBook();
+        var mv = Systems.add(mb, 'vpv');
+        mb.object.name = 'Жилой дом «Восточная»';
+        mb.object.code = '1517-2026-01-ПБ3';
+
+        var mail = Request.letter(mb, false);
+        same('тема — название объекта', mail.subject, 'Жилой дом «Восточная»');
+        same('адрес по умолчанию', mail.to, 'konstantin.yarkov@wilo.ru');
+        same('насосная в письме одна', mail.stations, 1);
+
+        /*
+            Адресатов несколько: их выбирают галочками в окне письма, а вписать
+            чужой адрес руками по-прежнему можно. В ссылку mailto: они идут
+            через запятую, каждый закодирован отдельно, в заголовке .eml — тоже
+            через запятую, как велит RFC 5322.
+        */
+        same('в списке поставщиков двое Wilo',
+            Request.CONTACTS.map(function (c) { return c.mail; }).join(' '),
+            'konstantin.yarkov@wilo.ru kirill.kopylov@wilo.ru');
+        same('адреса разбираются и через точку с запятой, и через запятую',
+            Request.recipients('a@b.ru,  c@d.ru ;; e@f.ru').join('|'), 'a@b.ru|c@d.ru|e@f.ru');
+        same('обратно в поле — через точку с запятой',
+            Request.joinTo(['a@b.ru', 'c@d.ru']), 'a@b.ru; c@d.ru');
+
+        var many = { to: 'kirill.kopylov@wilo.ru; pto@example.ru', subject: 'Тема', body: 'строка', files: [] };
+        same('в ссылке адреса через запятую, каждый закодирован',
+            Request.mailto(many).indexOf('mailto:kirill.kopylov%40wilo.ru,pto%40example.ru?') === 0, true);
+        same('в заголовке письма — через запятую',
+            Request.eml(many).split('\r\n')[0], 'To: kirill.kopylov@wilo.ru, pto@example.ru');
+
+        var vr = Vpv.solve(mv.vpv);
+        same('требуемая точка — из расчёта',
+            mail.body.indexOf('Q = ' + Fmt.num(vr.dict.Q, 2) + ' л/с, H = ' + Fmt.num(vr.pumpHead, 2) + ' м.') >= 0, true);
+        // Жокею нужен напор насоса: на 5 м выше основного, а не давление в сети.
+        same('напор жокея — напор установки плюс запас',
+            mail.body.indexOf('Жокей-насос\nQ = 1 м³/ч, H = ' + Fmt.num(vr.pumpHead + 5, 2) + ' м.') >= 0, true);
+        same('подпор в напор жокея не входит',
+            mail.body.indexOf(Fmt.num(vr.pumpHead + mv.vpv.inlet.guaranteed + 5, 2)) >= 0, false);
+        same('на схеме у жокея тот же напор', Scheme.station(mb).ents.some(function (e) {
+            return e.t === 'ins' && e.name === 'ВК_ЖОКЕЙ' && e.attrs['H'] === 'H = ' + Fmt.num(vr.pumpHead + 5, 2) + ' м';
+        }), true);
+
+        // А давление включения в записке считается с подпором — это другая величина.
+        var jt = Tch.jockeyTable(Tch.systems(mb), mb.text);
+        same('в записке давление включения — с подпором',
+            jt[0][2], Fmt.num(vr.pumpHead + mv.vpv.inlet.guaranteed + 5, 2));
+        same('шифр объекта в теле письма', mail.body.indexOf('1517-2026-01-ПБ3') >= 0, true);
+
+        mv.jockey = false;
+        same('жокей снят — и из письма тоже', Request.letter(mb, false).body.indexOf('Жокей-насос') >= 0, false);
+        mv.jockey = true;
+
+        // Состав насосной словами: ВПВ и АПТ в привычном порядке.
+        var ms = Stations.create(mb);
+        mb.stations.push(ms);
+        mb.systems.forEach(function (s) { Stations.assign(mb, ms, s.id, true); });
+        ms.zone = '1 зона';
+        same('заголовок блока — зона и состав', Request.title(Request.stations(mb)[0]), '1 зона ВПВ+АПТ');
+
+        // Письмо файлом .eml: заголовки, тема в base64 и вложения.
+        var eml = Request.eml({ to: 'a@b.ru', subject: 'Тема', body: 'строка', files: [] });
+        same('черновик для Outlook', /X-Unsent: 1/.test(eml), true);
+        same('русская тема закодирована', /Subject: =\?UTF-8\?B\?/.test(eml), true);
+
+        var withFile = Request.eml({ to: 'a@b.ru', subject: 'x', body: 'y',
+            files: [{ name: 'Расчёт.xlsx', type: 'application/x', bytes: new Uint8Array([1, 2, 3]) }] });
+        same('вложение отдельной частью', /Content-Disposition: attachment/.test(withFile), true);
+        same('и границы частей на месте', /multipart\/mixed; boundary=/.test(withFile), true);
+
+        section('Схема: выгрузка листа в DXF');
+        var sheetText = DxfWrite.build({
+            layers: Canon.layers(sb), blocks: Canon.BLOCKS, entities: joined.ents, box: joined.box
+        });
+        var sheetBack = Dxf.parse(sheetText);
+        same('лист читается своим же разбором', sheetBack.ok, true);
+        same('линии и надписи на месте', sheetBack.ents.length > 40, true);
+        same('ничего не пропущено как незнакомое', Object.keys(sheetBack.skipped).filter(function (k) {
+            return k !== 'ATTDEF';
+        }).length, 0);
+
+        section('Цвета AutoCAD и кириллица');
+        same('чистый красный — индекс 1', DxfWrite.aci('#FF0000'), 1);
+        same('чистый синий — индекс 5', DxfWrite.aci('#0000FF'), 5);
+        same('чёрный — индекс 7', DxfWrite.aci('#000000'), 7);
+        same('серый — не цветной индекс', DxfWrite.aci('#808080') >= 250 || DxfWrite.aci('#808080') === 8, true);
+
+        var bytes = DxfWrite.cp1251('Ду100 «В2.1» — №1');
+        same('кириллица пишется однобайтовой', bytes.length, 17);
+        same('буква Д — 0xC4', bytes[0], 0xC4);
+        same('знак № — 0xB9', bytes[bytes.length - 2], 0xB9);
+
+        section('DXF: что не читается');
+        same('двоичный DXF — внятный отказ', /двоичный/i.test(Dxf.parse('AutoCAD Binary DXF\u0000').error), true);
+        same('чужой файл — тоже', /DXF/.test(Dxf.parse('просто текст').error), true);
+        same('коды оформления MTEXT убираются', Dxf.plainText('{\\fArial|b0;Пом. \\P12}'), 'Пом. 12');
+    });
+
+    guard('Коридоры выше 75 м', function () {
+
+        /* Коридор длиной 18 м вдоль оси X, без поворотов. */
+        function axis(len) {
+            return [{ x: 0, y: 0 }, { x: len, y: 0 }];
+        }
+
+        function doorsAt(list) {
+            return list.map(function (s) { return { x: s, y: 1.2 }; });
+        }
+
+        function steps(res) {
+            var spots = res.spots || res;
+            var out = [];
+            for (var i = 1; i < spots.length; i++) out.push(Math.round((spots[i].s - spots[i - 1].s) * 1000));
+            return out;
+        }
+
+        section('Коридор: ороситель напротив каждой квартирной двери');
+
+        var simple = Corridor.place(axis(12), doorsAt([1.5, 4.5, 7.5, 10.5]), null);
+
+        same('оросителей по числу дверей', simple.spots.length, 4);
+        same('каждый встал напротив своей двери',
+            simple.spots.map(function (p) { return Math.round(p.s * 1000); }).join(' '),
+            '1500 4500 7500 10500');
+        same('замечаний нет', simple.notes.length, 0);
+
+        section('Далеко разнесённые двери: между ними добираются оросители');
+
+        // Двери через 8 м: наибольший шаг 3,5 м, значит между ними ещё два,
+        // и все три шага выходят поровну по 2,667 м — а не «3500, 3500, 1000».
+        var wide = Corridor.place(axis(11.5), doorsAt([1.75, 9.75]), null);
+
+        same('двери и два добора между ними', wide.spots.length, 4);
+        same('шаги поровну и не больше 3500', steps(wide).join(' '), '2667 2667 2667');
+
+        var tooWide = steps(wide).filter(function (v) { return v > 3500; });
+        same('шага больше наибольшего нет', tooWide.length, 0);
+
+        section('Торцы коридора: ряд доводится до них');
+
+        // Первая дверь в 6 м от торца: до неё ещё нужен ороситель, и первый
+        // встаёт не дальше половины наибольшего шага — 1,75 м.
+        var ends = Corridor.place(axis(12), doorsAt([6]), null);
+
+        same('от торца до первого, мм', Math.round(ends.spots[0].s * 1000), 1750);
+        same('от последнего до конца, мм',
+            Math.round((ends.length - ends.spots[ends.spots.length - 1].s) * 1000), 1750);
+
+        var far = steps(ends).filter(function (v) { return v > 3500; });
+        same('по дороге шаг не превышен', far.length, 0);
+
+        section('Две двери рядом: один ороситель посередине');
+
+        var pair = Corridor.place(axis(10), doorsAt([4.6, 5.4]), null);
+
+        same('ороситель один на обе двери', pair.spots.filter(function (p) {
+            return p.doors.length === 2;
+        }).length, 1);
+        same('и стоит посередине между ними, мм',
+            Math.round(pair.spots.filter(function (p) { return p.doors.length === 2; })[0].s * 1000), 5000);
+        same('об этом сказано', pair.notes.some(function (t) {
+            return /прикрывает один ороситель/.test(t);
+        }), true);
+
+        section('Двери ближе 1,5 м, но дальше допуска: обе остаются');
+
+        var tight = Corridor.place(axis(10), doorsAt([4.0, 5.2]), null);
+
+        same('оросителей два', tight.spots.filter(function (p) { return p.doors.length; }).length, 2);
+        same('и сказано, что шаг меньше нормы', tight.notes.some(function (t) {
+            return /меньше наименьшего шага/.test(t);
+        }), true);
+
+        section('Добор до торца не ставится впритык к соседу');
+
+        // Дверь в 850 мм от конца полосы добора: ороситель-добор встал бы в
+        // 850 мм от неё. Это не «добрали торец», а две розетки рядом. Лучше
+        // торец не добрать и сказать об этом числом.
+        var pinch = Corridor.place(axis(17.5), doorsAt([1.6, 4.6, 7.4, 10.4, 14.9]), null);
+
+        same('лишнего оросителя нет', pinch.spots.length, 6);
+        same('шага меньше 1500 нет', steps(pinch).filter(function (v) { return v < 1500; }).length, 0);
+        same('а про недобранный торец сказано', pinch.notes.some(function (t) {
+            return /до конца коридора/.test(t);
+        }), true);
+
+        section('Коридор с поворотом: шаг считается по оси, а не по прямой');
+
+        // Колено 3,49 + 2,59, как на чертеже 1386-00-ВК: по оси это 6,08 м,
+        // по прямой между концами — меньше.
+        var bend = [{ x: 0, y: 0 }, { x: 3.49, y: 0 }, { x: 3.49, y: 2.59 }];
+
+        near('длина оси — сумма звеньев', Corridor.length(bend), 6.08, 1e-9);
+
+        var turn = Corridor.place(bend, doorsAt([]), null);
+        var corner = Corridor.at(bend, 3.49);
+
+        near('точка на изломе — сам излом, X', corner.x, 3.49, 1e-9);
+        near('точка на изломе — сам излом, Y', corner.y, 0, 1e-9);
+
+        var after = Corridor.at(bend, 4.49);
+        near('за изломом ось поворачивает, X', after.x, 3.49, 1e-9);
+        near('за изломом ось поворачивает, Y', after.y, 1.0, 1e-9);
+
+        same('на повороте оросители тоже встали', turn.spots.length > 1, true);
+
+        section('Диаметры по числу оросителей');
+
+        var rows = Corridor.table('3:25|6:32|12:40');
+
+        same('строк в таблице', rows.length, 3);
+        same('два оросителя — Ду 25', Corridor.pick(rows, 2), 25);
+        same('три — ещё Ду 25', Corridor.pick(rows, 3), 25);
+        same('четыре — уже Ду 32', Corridor.pick(rows, 4), 32);
+        same('двадцать — последний в таблице', Corridor.pick(rows, 20), 40);
+        same('пустая таблица ничего не навязывает', Corridor.pick(Corridor.table(''), 5), 0);
+
+        section('Сборка на плане: труба от торца к стояку');
+
+        var p = Model.create();
+        var built = Corridor.build(p, axis(12), doorsAt([1.5, 4.5, 7.5, 10.5]),
+            { diameters: '2:25|4:32|8:40' }, null);
+
+        same('оросителей на плане', p.nodes.filter(function (n) { return n.spr; }).length, 4);
+        same('конец оси стал вводом', p.nodes.filter(function (n) { return n.src; }).length, 1);
+        same('ввод — последний узел, X', Math.round(Model.source(p).x * 1000), 12000);
+        same('участков', p.segments.length, 4);
+
+        // Первый участок несёт один ороситель, последний — все четыре.
+        var dns = p.segments.map(function (s) {
+            return Catalog.find(s.material, s.od, s.wall).dn;
+        });
+        same('диаметры растут к стояку', dns.join(' '), '25 25 32 32');
+
+        section('Сборка: ввод уже есть — коридор прицепляется к нему');
+
+        var p2 = Model.create();
+        var riser = Model.addNode(p2, 20, 0, { src: true });
+
+        Corridor.build(p2, axis(12), doorsAt([1.5, 4.5]), null, null);
+
+        same('второй ввод не появился', p2.nodes.filter(function (n) { return n.src; }).length, 1);
+        same('ввод остался прежним', Model.source(p2).id, riser.id);
+        same('к нему пришёл участок',
+            Model.segmentsAt(p2, riser.id).length, 1);
+
+        section('Один диаметр на весь коридор');
+
+        var p3 = Model.create();
+        Corridor.build(p3, axis(12), doorsAt([1.5, 4.5, 7.5, 10.5]), null, { dn: 40 });
+
+        var one = p3.segments.map(function (s) {
+            return Catalog.find(s.material, s.od, s.wall).dn;
+        });
+        same('все участки одного Ду', one.join(' '), '40 40 40 40');
+
+        section('Ось не задана — расстановки нет, но сказано почему');
+
+        var none = Corridor.place([{ x: 0, y: 0 }], [], null);
+
+        same('оросителей нет', none.spots.length, 0);
+        same('и об этом сказано', /Ось коридора не задана/.test(none.notes[0]), true);
+    });
+
+    // Пример приложения 6 — для ручной проверки выгрузки из консоли.
+    window.__excelExample = excelExample;
+
+    var summary = document.getElementById('summary');
+
+    function finish(pending) {
+        summary.className = failed ? 'bad' : pending ? '' : 'ok';
+        summary.textContent = failed
+            ? 'Провалено: ' + failed + ' из ' + (passed + failed)
+            : pending ? 'Проверок пройдено: ' + passed + ', читаю PDF…'
+                : 'Все проверки пройдены: ' + passed;
+    }
+
+    finish(true);
+
+    /*
+        Чтение PDF идёт через распаковку браузером, то есть обещаниями: эти
+        проверки дописываются после общего итога, и итог пересчитывается.
+    */
+    (function () {
+        section('Чертёж из PDF: пути листа');
+
+        // Маленький PDF без сжатия: отрезок, прямоугольник и форма XObject.
+        var content = '1 0 0 1 100 100 cm\n0 0 m 200 0 l S\n10 10 100 50 re f\n/X0 Do\n';
+        var form = '0 0 m 50 50 l S\n';
+        var pdf = '%PDF-1.4\n'
+            + '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n'
+            + '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n'
+            + '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595]'
+            + ' /Resources << /XObject << /X0 5 0 R >> >> /Contents 4 0 R >> endobj\n'
+            + '4 0 obj << /Length ' + content.length + ' >> stream\n' + content + 'endstream endobj\n'
+            + '5 0 obj << /Type /XObject /Subtype /Form /Matrix [1 0 0 1 400 300] /BBox [0 0 100 100]'
+            + ' /Length ' + form.length + ' >> stream\n' + form + 'endstream endobj\n%%EOF';
+
+        var bytes = new Uint8Array(pdf.length);
+        for (var i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xFF;
+
+        // Пакет приложений: два листа в один файл со штампом в углу.
+        section('Пакет приложений: склейка PDF со штампом');
+        Pdf.open(bytes.buffer).then(function (first) {
+            same('в исходнике одна страница', first.pages.length, 1);
+            return PdfWrite.merge([
+                { bytes: bytes, stamp: 'Приложение 1' },
+                { bytes: bytes, stamp: 'Приложение 2' }
+            ]);
+        }).then(function (merged) {
+            same('файл начинается как PDF', String.fromCharCode.apply(null, merged.subarray(0, 8)), '%PDF-1.7');
+            return Pdf.open(merged.buffer).then(function (doc) {
+                same('страниц стало две', doc.pages.length, 2);
+
+                var nums = Pdf.pagesOf(doc.doc);
+                var dict = doc.doc.dictNum(nums[0]).replace(/\s+/g, ' ');
+                same('страница привязана к новому дереву', /\/Parent 2 0 R/.test(dict), true);
+                same('штамп попал в ресурсы страницы', /\/XObject << \/Stamp\d+ \d+ 0 R/.test(dict), true);
+                same('и в содержимое — после чужого потока', /\/Contents \[\d+ 0 R .* \d+ 0 R\]/.test(dict), true);
+
+                // Размер листа не потерялся: он был унаследован от /Pages.
+                near('ширина листа прежняя', doc.pages[0].w, 842, 1e-9);
+
+                /*
+                    Трейлер со сведениями о файле и опознавательным номером:
+                    без них просмотрщики показывают пустые свойства документа,
+                    а иные считают файл неполным.
+                */
+                var text = String.fromCharCode.apply(null, merged.subarray(merged.length - 260));
+                same('в трейлере есть /Info', /\/Info \d+ 0 R/.test(text), true);
+                same('и опознавательный номер', /\/ID \[<[0-9A-F]{32}> <[0-9A-F]{32}>\]/.test(text), true);
+                same('файл кончается как PDF', /%%EOF\n$/.test(text), true);
+            });
+        }).catch(function (e) {
+            report('Пакет приложений: исключение', false, e && e.message ? e.message : String(e), '—');
+        });
+
+        /*
+            Ресурсы отдельным объектом — так делают Word и каталожные листы.
+            Штамп должен попасть в этот объект: второй ключ /Resources у
+            страницы оставил бы её без шрифтов, и текст пошёл бы кракозябрами.
+        */
+        (function () {
+            var content = '1 0 0 1 0 0 cm 0 0 m 10 10 l S\n';
+            var pdf = '%PDF-1.4\n'
+                + '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n'
+                + '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n'
+                + '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources 6 0 R /Contents 4 0 R >> endobj\n'
+                + '4 0 obj << /Length ' + content.length + ' >> stream\n' + content + 'endstream endobj\n'
+                + '6 0 obj << /Font << /F1 7 0 R >> >> endobj\n'
+                + '7 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n%%EOF';
+
+            var raw = new Uint8Array(pdf.length);
+            for (var i = 0; i < pdf.length; i++) raw[i] = pdf.charCodeAt(i) & 0xFF;
+
+            PdfWrite.merge([{ bytes: raw, stamp: 'Приложение 9' }]).then(function (merged) {
+                return Pdf.open(merged.buffer).then(function (doc) {
+                    var pageNum = Pdf.pagesOf(doc.doc)[0];
+                    var page = doc.doc.dictNum(pageNum).replace(/\s+/g, ' ');
+                    same('у страницы один /Resources', (page.match(/\/Resources/g) || []).length, 1);
+
+                    var ref = /\/Resources\s+(\d+)\s+\d+\s+R/.exec(page);
+                    same('ресурсы остались ссылкой', !!ref, true);
+
+                    var res = ref ? doc.doc.dictNum(Number(ref[1])).replace(/\s+/g, ' ') : '';
+                    same('штамп дописан в ресурсы страницы', /\/XObject << \/Stamp\d+ \d+ 0 R/.test(res), true);
+                    same('а шрифт в них остался', /\/Font << \/F1/.test(res), true);
+                });
+            }).catch(function (e) {
+                report('Штамп в ресурсах по ссылке: исключение', false, e && e.message ? e.message : String(e), '—');
+            });
+        })();
+
+        /*
+            Отступы штампа: у каталожных листов в правом верхнем углу стоит
+            логотип изготовителя, и надпись должна от него уходить.
+        */
+        (function () {
+            function place(opts) {
+                return PdfWrite.merge([{ bytes: bytes, stamp: 'Приложение 1' }], opts).then(function (merged) {
+                    var text = '';
+                    for (var i = 0; i < merged.length; i++) text += String.fromCharCode(merged[i]);
+                    var m = /([\d.]+) 0 0 ([\d.]+) ([\d.]+) ([\d.]+) cm \/Stamp/.exec(text);
+                    return m ? { x: Number(m[3]), y: Number(m[4]), w: Number(m[1]), h: Number(m[2]) } : null;
+                });
+            }
+
+            Promise.all([place(null), place({ right: 10, top: 20 })]).then(function (both) {
+                var a = both[0], b = both[1];
+                same('штамп нашёлся в потоке', !!a && !!b, true);
+                if (!a || !b) return;
+
+                var mm = 72 / 25.4;
+                near('по умолчанию отступ справа 40 мм', 842 - (a.x + a.w), 40 * mm, 0.02);
+                near('и сверху 7 мм', 595 - (a.y + a.h), 7 * mm, 0.02);
+                near('свои отступы слушаются: справа', 842 - (b.x + b.w), 10 * mm, 0.02);
+                near('свои отступы слушаются: сверху', 595 - (b.y + b.h), 20 * mm, 0.02);
+            }).catch(function (e) {
+                report('Отступы штампа: исключение', false, e && e.message ? e.message : String(e), '—');
+            });
+        })();
+
+        same('штамп рисуется маской', (function () {
+            var mask = PdfWrite.stampMask('Приложение 12', 4);
+            return mask.width > 20 && mask.height > 10 && mask.bits.length > 0;
+        })(), true);
+        same('габарит листа читается из /MediaBox', PdfWrite.boxSize('[0 0 1684 1191]').width, 1684);
+
+        Pdf.open(bytes.buffer).then(function (doc) {
+            same('страница одна', doc.pages.length, 1);
+            near('ширина листа в пунктах', doc.pages[0].w, 842, 1e-9);
+            near('лист в миллиметрах', doc.pages[0].w * 25.4 / 72, 297, 0.01);
+
+            return Pdf.geometry(doc.doc, doc.pages[0].num).then(function (g) {
+                var polys = g.ents.filter(function (e) { return e.t === 'p'; });
+                same('путей на странице — три', polys.length, 3);
+
+                var line = polys.filter(function (e) { return e.v.length === 4; })[0];
+                same('отрезок сдвинут матрицей cm', line && line.v.join(' '), '100 100 300 100');
+
+                var rect = polys.filter(function (e) { return e.v.length === 10; })[0];
+                same('прямоугольник обведён контуром', rect && rect.v.join(' '), '110 110 210 110 210 160 110 160 110 110');
+
+                // Форма идёт поверх действующей матрицы страницы: 400+100, 300+100.
+                var inForm = polys.filter(function (e) {
+                    return e.v.length === 4 && Math.abs(e.v[0] - 500) < 1e-9;
+                })[0];
+                same('форма XObject встала по своей матрице', inForm && inForm.v.join(' '), '500 400 550 450');
+
+                // Масштаб 1:100: пункт листа — это 100 пунктов натуры.
+                var factor = 100 * 0.0254 / 72;
+                var placed = Dxf.place({ ents: g.ents, bounds: Dxf.bounds(g.ents) }, factor);
+                near('ширина чертежа в метрах при 1:100', placed.w, (550 - 100) * factor, 1e-6);
+                near('450 пунктов листа — это 15,875 м', placed.w, 15.875, 1e-6);
+                near('масштаб ровный: 158,75 мм на листе', (550 - 100) * 25.4 / 72, 158.75, 1e-9);
+            });
+        }).catch(function (e) {
+            report('Чтение PDF: исключение', false, e && e.message ? e.message : String(e), '—');
+        }).then(function () { finish(false); });
+    })();
+})();
+</script>
+</body>
+</html>

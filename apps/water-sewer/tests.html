@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Самопроверка расчёта — СП 30.13330.2020</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+    main { max-width: 1100px; }
+    .t-ok { color: var(--green); }
+    .t-bad { color: var(--red); font-weight: 600; }
+    #summary { font-size: 15px; font-weight: 600; padding: 10px 14px; border-radius: 5px; }
+    #summary.ok { background: var(--green-soft); color: #0F6B4F; }
+    #summary.bad { background: var(--red-soft); color: #96241E; }
+    td.name { width: 55%; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">ВК<span>Самопроверка расчёта</span></div>
+    <div class="spacer"></div>
+    <a href="index.html"><button>К программе</button></a>
+</header>
+
+<main>
+
+<div class="card">
+    <h2>Что проверяется</h2>
+    <p class="hint">
+        Эталоны взяты из двух источников и не выдуманы. Первый — пример 5.1
+        методического пособия МП 28.13330-2017 «Методика по определению расчётных
+        расходов воды и стоков»: 16-этажный трёхсекционный дом, 864 жителя,
+        1152 прибора; сводная таблица 2 пособия даёт всю цепочку чисел. Второй —
+        выпущенный том «Расходы Солнечный 5.3», восемь секций.
+    </p>
+    <p class="hint">
+        <b>Про нормы.</b> Пособие 2017 года считает по редакции СП 30.13330.2016:
+        250 л/сут и 15,6 л/ч на жителя. Изменения 3 и 4 заменили их на 180 и 11,6.
+        Поэтому в тесте нормы задаются явно, как в пособии, — проверяются ФОРМУЛЫ,
+        а не действующие значения. Отдельная проверка следит, что в справочнике
+        лежат именно действующие 180/70.
+    </p>
+    <p class="hint">
+        <b>Про коэффициент.</b> Пособие снимает α по ближайшему большему узлу
+        таблицы: при N·P = 12,48 там взято значение узла 12,6. Поэтому сверка идёт
+        в режиме «по узлу», а интерполяция проверяется отдельно.
+    </p>
+    <div id="summary"></div>
+</div>
+
+<div class="card">
+    <table id="results"><tbody></tbody></table>
+</div>
+
+</main>
+
+<script src="js/sp30-data.js"></script>
+<script src="js/format.js"></script>
+<script src="js/tables.js"></script>
+<script src="js/demand.js"></script>
+<script src="js/consumers.js"></script>
+<script src="js/riser.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/xlsx.js"></script>
+<script src="js/docx.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var body = document.querySelector('#results tbody');
+    var passed = 0;
+    var failed = 0;
+
+    function section(title) {
+        body.insertAdjacentHTML('beforeend',
+            '<tr class="total"><td colspan="3" class="left">' + Format.html(title) + '</td></tr>');
+    }
+
+    function check(name, actual, expected, tolerance) {
+        var ok;
+        var shown;
+
+        if (typeof expected === 'number') {
+            var eps = tolerance === undefined ? 1e-9 : tolerance;
+            ok = typeof actual === 'number' && isFinite(actual)
+                && Math.abs(actual - expected) <= eps;
+            shown = Format.num(actual) + ' / ожидалось ' + Format.num(expected);
+        } else {
+            ok = actual === expected;
+            shown = String(actual) + ' / ожидалось ' + String(expected);
+        }
+
+        if (ok) passed++; else failed++;
+
+        body.insertAdjacentHTML('beforeend',
+            '<tr><td class="left name">' + Format.html(name) + '</td>'
+            + '<td class="left ' + (ok ? 't-ok' : 't-bad') + '">' + (ok ? 'ок' : 'НЕ СОШЛОСЬ') + '</td>'
+            + '<td class="left">' + Format.html(shown) + '</td></tr>');
+    }
+
+    var NODE = true;
+    var INTERP = false;
+
+    /* ---------------------------------------------------------------- */
+    section('Таблицы приложения Б прочитаны');
+
+    check('Б.1 N=2 P=0,1', Tables.fromB1(2, 0.1, NODE), 0.39, 0.0001);
+    check('Б.1 N=4 P=0,125', Tables.fromB1(4, 0.125, NODE), 0.62, 0.0001);
+    check('Б.1 N=100 P=0,1', Tables.fromB1(100, 0.1, NODE), 4.05, 0.0001);
+    check('Б.1 N=200 P=0,8', Tables.fromB1(200, 0.8, NODE), 39.50, 0.0001);
+
+    check('Б.2 N·P=0', Tables.fromB2(0, NODE), 0.200, 0.0001);
+    check('Б.2 N·P=10', Tables.fromB2(10, NODE), 4.126, 0.0001);
+    check('Б.2 N·P=58', Tables.fromB2(58, NODE), 16.22, 0.0001);
+    check('Б.2 N·P=100', Tables.fromB2(100, NODE), 25.91, 0.0001);
+    check('Б.2 N·P=1000', Tables.fromB2(1000, NODE), 218.87, 0.0001);
+    check('Б.2 N·P=2000', Tables.fromB2(2000, NODE), 426.80, 0.0001);
+
+    /* ---------------------------------------------------------------- */
+    section('Двойная интерполяция');
+
+    // Между узлами N=2 (0,39) и N=4 (0,58) при P=0,1 середина даёт 0,485.
+    check('Б.1 по N: N=3 P=0,1', Tables.fromB1(3, 0.1, INTERP), 0.485, 0.0001);
+    check('Б.1 по P: N=2 P=0,11', Tables.fromB1(2, 0.11, INTERP), 0.39, 0.0001);
+
+    // Настоящая двойная: N=3 между 2 и 4, P=0,3 между 0,25 и 0,316.
+    //   N=2: при P=0,3 -> 0,40
+    //   N=4: 0,72 + (0,05/0,066)·0,04 = 0,7503
+    //   N=3: (0,40 + 0,7503)/2 = 0,5752
+    check('Б.1 двойная: N=3 P=0,3', Tables.fromB1(3, 0.3, INTERP), 0.5752, 0.0005);
+
+    // Б.2 между узлами 12,4 (4,820) и 12,6 (4,877): при 12,48 -> 4,8428.
+    check('Б.2 между узлами: N·P=12,48', Tables.fromB2(12.48, INTERP), 4.8428, 0.0005);
+    check('Б.2 по узлу: N·P=12,48', Tables.fromB2(12.48, NODE), 4.877, 0.0005);
+
+    /* ---------------------------------------------------------------- */
+    section('Выбор таблицы по пункту 5.3');
+
+    check('P<0,1 — таблица Б.2', Tables.tableOf(1152, 0.0108), 'Б.2');
+    check('N>200 — таблица Б.2', Tables.tableOf(240, 0.2), 'Б.2');
+    check('P>0,1 и N≤200 — Б.1', Tables.tableOf(100, 0.2), 'Б.1');
+
+    /* ---------------------------------------------------------------- */
+    section('Пример 5.1 МП 28.13330-2017: жилой дом, 864 жителя');
+
+    // Нормы по редакции 2016 года — те, по которым посчитано пособие.
+    var norm2016 = {
+        name: 'Жилые здания с ваннами 1500–1700 мм (редакция 2016)',
+        unit: '1 житель',
+        qu: 250, quh: 85, quc: 165,
+        qhru: 15.6, qhruh: 8.5, qhruc: 7.1,
+        q0: 0.3, q0hr: 300,
+        q0h: 0.2, q0hrh: 200,
+        q0c: 0.2, q0hrc: 200,
+        t: 24
+    };
+
+    var group = {
+        name: 'Жилая часть',
+        norm: norm2016,
+        users: 864,
+        fixtures: 1152,
+        fixturesHot: 864,
+        q0Sewer: 1.6
+    };
+
+    var example = Demand.run(group, NODE);
+
+    check('P общий', example.total.P, 0.0108, 0.0001);
+    check('N·P общий', example.total.NP, 12.48, 0.01);
+    check('α общий', example.total.alpha, 4.877, 0.01);
+    check('q общий, л/с', example.total.q, 7.32, 0.02);
+    check('P_hr общий', example.total.Phr, 0.039, 0.0005);
+    check('N·P_hr общий', example.total.NPhr, 44.9, 0.1);
+    check('α_hr общий', example.total.alphaHr, 13.13, 0.05);
+    check('q_hr общий, м³/ч', example.total.qhr, 19.7, 0.05);
+    check('q_T общий, м³/сут', example.total.qDay, 216.0, 0.1);
+    check('q_ср.ч общий, м³/ч', example.total.qAvgHour, 9.0, 0.05);
+
+    check('P горячей', example.hot.P, 0.0118, 0.0002);
+    check('q горячей, л/с', example.hot.q, 4.16, 0.05);
+    check('q_T горячей, м³/сут', example.hot.qDay, 73.44, 0.1);
+
+    check('P холодной', example.cold.P, 0.0074, 0.0002);
+    check('q холодной, л/с', example.cold.q, 3.68, 0.05);
+    check('q_T холодной, м³/сут', example.cold.qDay, 142.56, 0.1);
+
+    check('q стоков = q_tot + q0_s', example.sewer, example.total.q + 1.6, 0.001);
+
+    /* ---------------------------------------------------------------- */
+    section('Формула (5): прибавка прибора только до 8 л/с');
+
+    check('при q_tot = 5 л/с прибавка есть', Demand.sewer(5, 1.6, null), 6.6, 0.001);
+    check('при q_tot = 8 л/с прибавка есть', Demand.sewer(8, 1.6, null), 9.6, 0.001);
+    check('при q_tot = 8,5 л/с прибавки нет', Demand.sewer(8.5, 1.6, null), 8.5, 0.001);
+
+    /* ---------------------------------------------------------------- */
+    section('Справочник норм: действующая редакция');
+
+    var living = Tables.norm('Жилые дома с ваннами от 1500 мм, оборудованными душами');
+
+    check('норма найдена', living !== null, true);
+    check('сутки общая, л', living.qu, 180, 0.001);
+    check('сутки горячей, л', living.quh, 70, 0.001);
+    check('сутки холодной, л', living.quc, 110, 0.001);
+    check('час наибольшего, л', living.qhru, 11.6, 0.001);
+    check('час горячей, л', living.qhruh, 6.5, 0.001);
+    check('час холодной, л', living.qhruc, 5.1, 0.001);
+    check('прибор общий, л/с', living.q0, 0.3, 0.001);
+    check('прибор горячей, л/с', living.q0h, 0.2, 0.001);
+    check('время потребления, ч', living.t, 24, 0.001);
+
+    var office = Tables.norm('Административные здания');
+    check('офис: сутки, л', office.qu, 12, 0.001);
+    check('офис: час, л', office.qhru, 4, 0.001);
+    check('офис: время, ч', office.t, 8, 0.001);
+
+    /* ---------------------------------------------------------------- */
+    section('Справочник приборов');
+
+    var toilet = Tables.fixture('Унитаз со смывным бачком');
+    check('унитаз: q0, л/с', toilet.q0, 0.1, 0.001);
+    check('унитаз: стоки, л/с', toilet.qs, 1.6, 0.001);
+    check('унитаз: Ø отвода, мм', toilet.dyo, 85, 0.001);
+
+    var bath = Tables.fixture('Ванна со смесителем');
+    check('ванна: q0 общий', bath.q0, 0.25, 0.001);
+    check('ванна: q0 горячей', bath.q0h, 0.18, 0.001);
+    check('ванна: стоки', bath.qs, 1.1, 0.001);
+
+    var set = Riser.fixtureSet([
+        { name: 'Ванна со смесителем', count: 1 },
+        { name: 'Унитаз со смывным бачком', count: 1 },
+        { name: 'Мойка со смесителем', count: 1 }
+    ]);
+
+    check('приборов в наборе', set.count, 3);
+    check('максимальный расход стоков в квартире', set.q0Sewer, 1.6, 0.001);
+    check('прибор с наибольшим водоотведением', set.worst, 'Унитаз со смывным бачком');
+
+    /* ---------------------------------------------------------------- */
+    section('Сверка с томом «Расходы Солнечный 5.3»');
+
+    // Столбцы В1 по каждой из восьми секций: жителей, м³/сут, м³/ч, л/с.
+    // Приборов в томе не приведено — принято четыре на квартиру при трёх
+    // жильцах, то есть U·4/3, и это подтвердилось по всем восьми секциям.
+    var reference = [
+        [143, 15.730, 2.082, 0.976],
+        [117, 12.870, 1.834, 0.877],
+        [125, 13.750, 1.912, 0.908],
+        [ 65,  7.150, 1.287, 0.652],
+        [ 94, 10.340, 1.603, 0.783],
+        [ 70,  7.700, 1.343, 0.676],
+        [ 53,  5.830, 1.145, 0.592],
+        [ 64,  7.040, 1.275, 0.647]
+    ];
+
+    for (var i = 0; i < reference.length; i++) {
+        var users = reference[i][0];
+
+        var section5 = {
+            name: 'секция ' + (i + 1),
+            norm: living,
+            users: users,
+            fixtures: Math.round(users * 4 / 3),
+            fixturesHot: users,
+            q0Sewer: 1.6
+        };
+
+        var value = Demand.run(section5, INTERP);
+
+        check('секция ' + (i + 1) + ', В1 м³/сут', value.cold.qDay, reference[i][1], 0.001);
+        check('секция ' + (i + 1) + ', В1 м³/ч', value.cold.qhr, reference[i][2], 0.002);
+        check('секция ' + (i + 1) + ', В1 л/с', value.cold.q, reference[i][3], 0.002);
+    }
+
+    /* ---------------------------------------------------------------- */
+    section('Свод по разным группам не складывается напрямую');
+
+    var livingGroup = {
+        name: 'Жилая часть', norm: living,
+        users: 731, fixtures: 974, fixturesHot: 731, q0Sewer: 1.6
+    };
+
+    var officeGroup = {
+        name: 'Встроенные помещения', norm: office,
+        users: 118, fixtures: 96, fixturesHot: 96, q0Sewer: 1.6
+    };
+
+    var one = Demand.run(livingGroup, INTERP);
+    var two = Demand.run(officeGroup, INTERP);
+    var all = Demand.combine('Итого по комплексу', [livingGroup, officeGroup], INTERP);
+
+    check('приборы сложились', all.total.fixtures, 1070);
+    check('суточный расход сложился', all.total.qDay, one.total.qDay + two.total.qDay, 0.01);
+
+    // Главное свойство свода: секундный расход комплекса МЕНЬШЕ суммы расходов
+    // частей. Сложи их напрямую — получишь завышенный ввод и лишний диаметр.
+    check('секундный расход меньше суммы частей',
+        all.total.q < one.total.q + two.total.q, true);
+    check('секундный расход больше наибольшей части',
+        all.total.q > one.total.q, true);
+
+    /* ---------------------------------------------------------------- */
+    section('Приложение К: пропускная способность стояков');
+
+    check('ПВХ Ø110, отвод Ø110 под 87,5°',
+        Tables.capacity(true, 'ПВХ', 110, 110, 87.5, 0).value, 3.58, 0.001);
+    check('ПВХ Ø110, отвод Ø110 под 45°',
+        Tables.capacity(true, 'ПВХ', 110, 110, 45, 0).value, 5.85, 0.001);
+    check('ПВХ Ø110, отвод Ø50 под 45°',
+        Tables.capacity(true, 'ПВХ', 110, 50, 45, 0).value, 8.22, 0.001);
+    check('SML Ø150, отвод Ø100 под 45°',
+        Tables.capacity(true, 'SML', 150, 100, 45, 0).value, 14.86, 0.001);
+    check('исполнения нет — ноль',
+        Tables.capacity(true, 'ПВХ', 200, 110, 45, 0).value, 0, 0.001);
+
+    // Невентилируемый: между узлами 2 м (5,90) и 3 м (4,10) при 2,5 м — 5,00.
+    check('невентилируемый ПВХ Ø110/110 под 87,5° на 2 м',
+        Tables.capacity(false, 'ПВХ', 110, 110, 87.5, 2).value, 5.90, 0.001);
+    check('невентилируемый ПВХ Ø110/110 под 87,5° на 3 м',
+        Tables.capacity(false, 'ПВХ', 110, 110, 87.5, 3).value, 4.10, 0.001);
+    check('невентилируемый, интерполяция по высоте 2,5 м',
+        Tables.capacity(false, 'ПВХ', 110, 110, 87.5, 2.5).value, 5.00, 0.001);
+    check('выше таблицы — по последнему узлу',
+        Tables.capacity(false, 'ПВХ', 110, 110, 87.5, 25).value, 1.10, 0.001);
+
+    /* ---------------------------------------------------------------- */
+    section('Стояк канализации: проверка на срыв гидрозатвора');
+
+    var flatSet = [
+        { name: 'Унитаз со смывным бачком', count: 2 },
+        { name: 'Ванна со смесителем', count: 2 },
+        { name: 'Мойка со смесителем', count: 2 },
+        { name: 'Умывальник со смесителем', count: 2 }
+    ];
+
+    var stack = {
+        mark: 'Ст К1-1',
+        norm: living,
+        sections: [{ from: 1, to: 17, residents: 6, fixtures: flatSet }],
+        floorHeightM: 3,
+        vented: true,
+        material: 'ПВХ',
+        riserMm: 110,
+        branchMm: 110,
+        angleDeg: 87.5,
+        node: INTERP
+    };
+
+    var run = Riser.run(stack);
+
+    check('этажей в расчёте', run.floors.length, 17);
+    check('приборов на стояке', run.set.fixtures, 136);
+    check('жильцов на стояке', run.set.residents, 102);
+    check('q0_s набора', run.set.q0Sewer, 1.6, 0.001);
+    check('первой строкой верхний этаж', run.floors[0].floor, 17);
+    check('последней строкой основание', run.base.floor, 1);
+    check('у верхнего этажа сверху один этаж', run.floors[0].above, 1);
+    check('у основания сверху все этажи', run.base.above, 17);
+    check('приборов у основания', run.base.fixtures, 136);
+    check('жильцов у основания', run.base.residents, 102);
+    check('пропускная способность, л/с', run.capacity, 3.58, 0.001);
+
+    // Цепочка у основания считается вручную:
+    //   P = 11,6 · 102 / (3600 · 0,3 · 136) = 0,008056
+    //   N·P = 1,0956 ; α по Б.2 ; q = 5 · 0,3 · α ; q_s = q + 1,6
+    var P = 11.6 * 102 / (3600 * 0.3 * 136);
+    var alpha = Tables.alpha(136, P, INTERP);
+
+    check('P у основания', run.base.P, P, 1e-9);
+    check('α у основания', run.base.alpha, alpha, 1e-9);
+    check('q_tot у основания, л/с', run.base.q, 5 * 0.3 * alpha, 1e-9);
+    check('q_s у основания, л/с', run.base.qs, 5 * 0.3 * alpha + 1.6, 1e-9);
+
+    check('расход растёт сверху вниз',
+        run.floors[0].qs < run.base.qs, true);
+    check('таблица Б.2 — рабочая для жилья', run.base.table, 'Б.2');
+
+    // Семнадцать этажей Ø110 с отводами под 87,5° тянет, но впритык: загрузка
+    // 87 %. Это и есть типичная картина жилого дома — запаса почти нет.
+    check('17 этажей под 87,5° проходят', run.passes, true);
+    check('загрузка стояка под 87,5°', run.load, 3.128 / 3.58, 0.005);
+
+    // Сорок этажей на том же стояке уже не проходят.
+    var tall = {};
+    for (var key in stack) if (stack.hasOwnProperty(key)) tall[key] = stack[key];
+    tall.sections = [{ from: 1, to: 40, residents: 6, fixtures: flatSet }];
+
+    var tallRun = Riser.run(tall);
+    check('40 этажей под 87,5° не проходят', tallRun.passes, false);
+    check('расход 40 этажей больше расхода 17', tallRun.base.qs > run.base.qs, true);
+
+    // Тот же расход под 45° проходит: угол присоединения отводов даёт больше,
+    // чем диаметр.
+    tall.angleDeg = 45;
+    var better = Riser.run(tall);
+    check('40 этажей под 45° проходят', better.passes, true);
+    check('пропускная способность выросла', better.capacity, 5.85, 0.001);
+    check('исполнения на выбор найдены', tallRun.floors.length > 0
+        && Riser.alternatives(tall).length > 0, true);
+
+    function limit(angleDeg) {
+        return Riser.limitFloors({
+            norm: living,
+            sections: [{ from: 1, to: 17, residents: 6, fixtures: flatSet }],
+            floorHeightM: 3, vented: true, material: 'ПВХ',
+            riserMm: 110, branchMm: 110, angleDeg: angleDeg, node: INTERP
+        }, 60);
+    }
+
+    check('предельная этажность под 87,5° меньше, чем под 45°',
+        limit(87.5) < limit(45), true);
+    check('под 87,5° предельная этажность не меньше семнадцати', limit(87.5) >= 17, true);
+
+    /* ---------------------------------------------------------------- */
+    section('Стояк: участки с разными наборами приборов');
+
+    /*
+        Стояк из двух участков: с 1 по 16 этаж пять приборов и три жильца, с 17
+        по 25 — шесть приборов и четыре жильца. Так и выглядит дом, где верхние
+        этажи с другой планировкой.
+    */
+    var five = [
+        { name: 'Унитаз со смывным бачком', count: 1 },
+        { name: 'Раковина с водоразборным краном', count: 1 },
+        { name: 'Ванна со смесителем', count: 1 },
+        { name: 'Мойка со смесителем', count: 1 },
+        { name: 'Умывальник со смесителем', count: 1 }
+    ];
+
+    var six = five.concat([{ name: 'Душевая кабина с глубоким поддоном', count: 1 }]);
+
+    var mixed = {
+        mark: 'Ст К1-2',
+        norm: living,
+        sections: [
+            { from: 1, to: 16, residents: 3, fixtures: five },
+            { from: 17, to: 25, residents: 4, fixtures: six }
+        ],
+        floorHeightM: 3,
+        vented: true,
+        material: 'ПВХ',
+        riserMm: 110,
+        branchMm: 110,
+        angleDeg: 45,
+        node: INTERP
+    };
+
+    var mixedRun = Riser.run(mixed);
+
+    check('этажей всего', mixedRun.top, 25);
+    check('строк по этажам', mixedRun.floors.length, 25);
+    check('приборов всего: 16·5 + 9·6', mixedRun.set.fixtures, 16 * 5 + 9 * 6);
+    check('жильцов всего: 16·3 + 9·4', mixedRun.set.residents, 16 * 3 + 9 * 4);
+
+    // Раскладка: на этаже 16 пять приборов, на 17 — шесть.
+    check('на 16 этаже пять приборов', mixedRun.layout[15].fixtures, 5);
+    check('на 17 этаже шесть приборов', mixedRun.layout[16].fixtures, 6);
+    check('на 16 этаже три жильца', mixedRun.layout[15].residents, 3);
+    check('на 17 этаже четыре жильца', mixedRun.layout[16].residents, 4);
+
+    // Накопление сверху вниз: на 17 этаже стояк несёт девять верхних этажей.
+    var floor17 = null;
+    var floor16 = null;
+
+    for (var mf = 0; mf < mixedRun.floors.length; mf++) {
+        if (mixedRun.floors[mf].floor === 17) floor17 = mixedRun.floors[mf];
+        if (mixedRun.floors[mf].floor === 16) floor16 = mixedRun.floors[mf];
+    }
+
+    check('на 17 этаже накоплено 9·6 приборов', floor17.fixtures, 54);
+    check('на 17 этаже накоплено 9·4 жильцов', floor17.residents, 36);
+    check('на 16 этаже приборов на пять больше', floor16.fixtures, 59);
+    check('на 16 этаже жильцов на три больше', floor16.residents, 39);
+    check('у основания все приборы', mixedRun.base.fixtures, 134);
+    check('у основания все жильцы', mixedRun.base.residents, 84);
+
+    // Прибор с наибольшим водоотведением ищется по всему стояку, а не по участку.
+    check('q0_s по всему стояку', mixedRun.set.q0Sewer, 1.6, 0.001);
+
+    // Расход растёт сверху вниз без разрывов на границе участков.
+    var growing = true;
+    for (mf = 1; mf < mixedRun.floors.length; mf++) {
+        if (mixedRun.floors[mf].qs < mixedRun.floors[mf - 1].qs) growing = false;
+    }
+
+    check('расход не убывает сверху вниз', growing, true);
+
+    // Этаж вне участков остаётся пустым и в накоплении ничего не добавляет.
+    var gapped = Riser.run({
+        norm: living,
+        sections: [
+            { from: 1, to: 2, residents: 3, fixtures: five },
+            { from: 5, to: 6, residents: 3, fixtures: five }
+        ],
+        floorHeightM: 3, vented: true, material: 'ПВХ',
+        riserMm: 110, branchMm: 110, angleDeg: 45, node: INTERP
+    });
+
+    check('этажность по верхнему участку', gapped.top, 6);
+    check('этаж вне участков пуст', gapped.layout[2].fixtures, 0);
+    check('приборов только с заданных этажей', gapped.set.fixtures, 20);
+
+    // Перекрытие участков решается в пользу последнего.
+    var overlapped = Riser.run({
+        norm: living,
+        sections: [
+            { from: 1, to: 25, residents: 3, fixtures: five },
+            { from: 17, to: 25, residents: 4, fixtures: six }
+        ],
+        floorHeightM: 3, vented: true, material: 'ПВХ',
+        riserMm: 110, branchMm: 110, angleDeg: 45, node: INTERP
+    });
+
+    check('перекрытие в пользу последнего участка',
+        overlapped.layout[16].fixtures, 6);
+    check('за перекрытием остаётся первый участок',
+        overlapped.layout[15].fixtures, 5);
+    check('итог совпадает с раздельной раскладкой',
+        overlapped.set.fixtures, mixedRun.set.fixtures);
+
+    // Участки, записанные наоборот, читаются так же.
+    var reversed = Riser.run({
+        norm: living,
+        sections: [{ from: 16, to: 1, residents: 3, fixtures: five }],
+        floorHeightM: 3, vented: true, material: 'ПВХ',
+        riserMm: 110, branchMm: 110, angleDeg: 45, node: INTERP
+    });
+
+    check('участок «с 16 по 1» читается как «с 1 по 16»', reversed.top, 16);
+    check('и даёт те же приборы', reversed.set.fixtures, 80);
+
+    /* ---------------------------------------------------------------- */
+    section('Стояк: расчёт по приборам');
+
+    // Тот же стояк, но вероятность определяется один раз по стояку в целом.
+    // При типовых этажах оба способа обязаны дать одно и то же: вероятность и
+    // так выходит одинаковой на всех этажах. Расхождение здесь означало бы
+    // ошибку в одном из двух путей.
+    var same = {};
+    for (var sk in stack) if (stack.hasOwnProperty(sk)) same[sk] = stack[sk];
+    same.angleDeg = 87.5;
+    same.byFixtures = true;
+    same.totalFixtures = 0;
+    same.totalUsers = 0;
+
+    var byFixtures = Riser.run(same);
+    var byUsers = Riser.run((function () {
+        var copy = {};
+        for (var ck in same) if (same.hasOwnProperty(ck)) copy[ck] = same[ck];
+        copy.byFixtures = false;
+        return copy;
+    })());
+
+    check('общее N на стояке', byFixtures.totalFixtures, 136);
+    check('общее U на стояке', byFixtures.totalUsers, 102);
+    check('общее N·P', byFixtures.NP, 136 * P, 1e-9);
+    check('P на один прибор', byFixtures.P, P, 1e-9);
+
+    check('при типовых этажах способы совпадают: q_s',
+        byFixtures.base.qs, byUsers.base.qs, 1e-9);
+    check('при типовых этажах способы совпадают: α',
+        byFixtures.base.alpha, byUsers.base.alpha, 1e-9);
+    check('при типовых этажах способы совпадают: вердикт',
+        byFixtures.passes, byUsers.passes);
+
+    // По этажам суммируются приборы, вероятность на всех этажах одна.
+    check('приборов на верхнем этаже', byFixtures.floors[0].fixtures, 8);
+    check('приборов на пятом сверху', byFixtures.floors[4].fixtures, 40);
+    check('вероятность на верхнем этаже равна вероятности у основания',
+        byFixtures.floors[0].P, byFixtures.base.P, 1e-12);
+    check('N·P на пятом сверху', byFixtures.floors[4].NP, 40 * P, 1e-9);
+
+    // Заданные вручную N и U задают вероятность прямо: удвоив U, получаем
+    // вдвое большую вероятность и больший расход.
+    var direct = {};
+    for (var dk in same) if (same.hasOwnProperty(dk)) direct[dk] = same[dk];
+    direct.totalFixtures = 136;
+    direct.totalUsers = 204;
+
+    var doubled = Riser.run(direct);
+
+    check('заданное U принято', doubled.totalUsers, 204);
+    check('вероятность выросла вдвое', doubled.P, 2 * P, 1e-9);
+    check('расход вырос', doubled.base.qs > byFixtures.base.qs, true);
+
+    // Неравномерный стояк: жильцов меньше, чем даёт умножение на этажи.
+    var uneven = {};
+    for (var uk in same) if (same.hasOwnProperty(uk)) uneven[uk] = same[uk];
+    uneven.totalUsers = 80;
+
+    var unevenRun = Riser.run(uneven);
+    check('при заданном U = 80 вероятность ниже', unevenRun.P < P, true);
+    check('и расход ниже', unevenRun.base.qs < byFixtures.base.qs, true);
+
+    check('предельная этажность считается и по приборам',
+        Riser.limitFloors(same, 60) > 0, true);
+    check('предельная этажность совпадает со способом по потребителям',
+        Riser.limitFloors(same, 60), Riser.limitFloors((function () {
+            var copy = {};
+            for (var ck in same) if (same.hasOwnProperty(ck)) copy[ck] = same[ck];
+            copy.byFixtures = false;
+            return copy;
+        })(), 60));
+
+    check('в разборе по приборам есть общее N·P',
+        /Вероятность действия приборов — одна на стояк/.test(byFixtures.trace.text()), true);
+
+    /* ---------------------------------------------------------------- */
+    section('Разбор формул выводится');
+
+    check('строк разбора больше двадцати', example.trace.lines.length > 20, true);
+    check('в разборе есть формула P', /P = q_hr,u/.test(example.trace.text()), true);
+    check('в разборе есть таблица Б.2', /по таблице Б\.2/.test(example.trace.text()), true);
+    check('в разборе стояка есть проверка',
+        /срыв гидрозатвор/.test(run.trace.text()), true);
+
+    /* ---------------------------------------------------------------- */
+    section('Потребители: два количества и своды по наборам');
+
+    /*
+        Эталон — выпущенная таблица «Основные показатели»: две жилые секции с
+        разными суточными и часовыми количествами. Суточный объём считается по
+        первому числу, вероятность действия приборов — по второму.
+    */
+    var project = {
+        groups: [{ id: 'g1', name: 'Секция 1' }, { id: 'g2', name: 'Секция 2' }],
+        consumers: [
+            {
+                id: 'c1', name: 'Жилые помещения С1', group: 'g1', norm: living.name,
+                process: '1', hours: 0, quality: 'Питьевая',
+                usersDay: 291, usersHour: 620, fixtures: 0, fixturesHot: 0,
+                q0Sewer: 1.6, source: 'city', drain: 'household', lossPercent: 0
+            },
+            {
+                id: 'c2', name: 'Жилые помещения С2', group: 'g2', norm: living.name,
+                process: '1', hours: 0, quality: 'Питьевая',
+                usersDay: 57, usersHour: 112, fixtures: 0, fixturesHot: 0,
+                q0Sewer: 1.6, source: 'city', drain: 'household', lossPercent: 0
+            }
+        ],
+        sets: []
+    };
+
+    var c1 = Consumers.run(project.consumers[0], INTERP);
+
+    check('С1: В1 м³/сут по суточному количеству', c1.cold.qDay, 32.010, 0.001);
+    check('С1: В1 м³/ч по часовому количеству', c1.cold.qhr, 5.770, 0.002);
+    check('С1: В1 л/с', c1.cold.q, 2.349, 0.002);
+    check('С1: Т3 м³/сут', c1.hot.qDay, 20.370, 0.001);
+    check('С1: Т3 м³/ч', c1.hot.qhr, 6.933, 0.002);
+    check('С1: Т3 л/с', c1.hot.q, 2.759, 0.002);
+    check('С1: В1 общ. м³/сут', c1.total.qDay, 52.380, 0.001);
+    check('С1: В1 общ. м³/ч', c1.total.qhr, 11.892, 0.002);
+    check('С1: В1 общ. л/с', c1.total.q, 4.656, 0.002);
+
+    var c2 = Consumers.run(project.consumers[1], INTERP);
+
+    check('С2: В1 общ. м³/сут', c2.total.qDay, 10.260, 0.001);
+    check('С2: В1 общ. м³/ч', c2.total.qhr, 3.492, 0.002);
+    check('С2: В1 общ. л/с', c2.total.q, 1.610, 0.002);
+
+    // Суточный объём НЕ должен считаться по часовому количеству: 620 жителей
+    // дали бы 111,6 м³/сут вместо 52,38.
+    check('суточный объём взят не по часовому количеству', c1.total.qDay < 60, true);
+
+    project.sets = [
+        { id: 's-living', name: 'Итого по жилым помещениям', members: ['c1', 'c2'], sets: [] },
+        { id: 's-object', name: 'ИТОГО ПО ОБЪЕКТУ', members: [], sets: ['s-living'] }
+    ];
+
+    var setLiving = Consumers.runSet(project.sets[0], project, INTERP);
+
+    check('свод: потребителей', setLiving.consumers.length, 2);
+    check('свод: U суточное сложилось', setLiving.group.usersDay, 348);
+    check('свод: U часовое сложилось', setLiving.group.users, 732);
+    check('свод: В1 м³/сут', setLiving.cold.qDay, 38.280, 0.001);
+    check('свод: Т3 м³/сут', setLiving.hot.qDay, 24.360, 0.001);
+    check('свод: В1 общ. м³/сут', setLiving.total.qDay, 62.640, 0.001);
+    check('свод: В1 общ. м³/ч', setLiving.total.qhr, 13.548, 0.002);
+    check('свод: В1 общ. л/с', setLiving.total.q, 5.222, 0.002);
+
+    // Главное свойство свода: он МЕНЬШЕ суммы частей.
+    check('свод меньше суммы секундных расходов',
+        setLiving.total.q < c1.total.q + c2.total.q, true);
+    check('свод больше наибольшей части', setLiving.total.q > c1.total.q, true);
+    check('суточные объёмы, наоборот, сложились',
+        setLiving.total.qDay, c1.total.qDay + c2.total.qDay, 0.001);
+
+    /* ---------------------------------------------------------------- */
+    section('Наборы: вложенность, дубликаты, кольца');
+
+    var expanded = Consumers.expand(project.sets[1], project);
+
+    check('вложенный набор развёрнут', expanded.length, 2);
+
+    var setObject = Consumers.runSet(project.sets[1], project, INTERP);
+    check('вложенный набор даёт тот же расход', setObject.total.q, setLiving.total.q, 1e-9);
+
+    // Потребитель, выбранный и прямо, и через вложенный набор, считается один раз.
+    project.sets[1].members = ['c1'];
+    var again = Consumers.expand(project.sets[1], project);
+
+    check('дубликат отброшен', again.length, 2);
+    check('расход не удвоился',
+        Consumers.runSet(project.sets[1], project, INTERP).total.q, setLiving.total.q, 1e-9);
+
+    // Кольцо: набор включает сам себя через цепочку. Расчёт обязан завершиться.
+    project.sets[0].sets = ['s-object'];
+    var looped = Consumers.expand(project.sets[1], project);
+
+    check('кольцо не подвесило разворачивание', looped.length >= 2, true);
+    project.sets[0].sets = [];
+
+    // Пустой набор не даёт расхода, но и не роняет расчёт.
+    project.sets.push({ id: 's-empty', name: 'Пустой', members: [], sets: [] });
+    check('пустой набор возвращает пусто',
+        Consumers.runSet(project.sets[2], project, INTERP), null);
+
+    /* ---------------------------------------------------------------- */
+    section('Баланс: потери и назначение стока');
+
+    var withLoss = {};
+    for (var bk in project.consumers[0]) {
+        if (project.consumers[0].hasOwnProperty(bk)) withLoss[bk] = project.consumers[0][bk];
+    }
+    withLoss.lossPercent = 10;
+
+    var b = Consumers.balance(withLoss, 100);
+
+    check('потери 10 % от объёма', b.loss, 10, 0.001);
+    check('в канализацию уходит остаток', b.drained, 90, 0.001);
+    check('источник по умолчанию — городской водопровод', b.source, 'city');
+    check('назначение стока — хозяйственно-бытовые', b.drain, 'household');
+    check('имя источника', Consumers.sourceName('well'), 'Артезианские скважины');
+    check('имя стока', Consumers.drainName('storm'), 'Водосток');
+
+    // Прочий расход: полив 824 м² по 3 л/м² — 2,472 м³/сут.
+    check('полив по норме на единицу',
+        Consumers.extraDay({ count: 824, rate: 3, m3day: 0 }), 2.472, 0.001);
+    check('заданный прямо объём главнее нормы',
+        Consumers.extraDay({ count: 824, rate: 3, m3day: 5 }), 5, 0.001);
+
+    /* ---------------------------------------------------------------- */
+    section('Проект: чтение файла прежней версии');
+
+    var old = {
+        name: 'Старый проект',
+        alphaMode: 'node',
+        groups: [{ norm: living.name, users: 731, fixtures: 974, fixturesHot: 731, q0Sewer: 1.6 }],
+        heat: { hotT: 60, coldT: 5, losses: 0 }
+    };
+
+    var upgraded = Storage.normalize(old);
+
+    check('версия поднята', upgraded.version, 2);
+    check('название сохранилось', upgraded.name, 'Старый проект');
+    check('режим α сохранился', upgraded.alphaMode, 'node');
+    check('группа стала потребителем', upgraded.consumers.length, 1);
+    check('количество перенесено в оба поля',
+        upgraded.consumers[0].usersDay === 731 && upgraded.consumers[0].usersHour === 731, true);
+    check('создан итог по объекту', upgraded.sets.length, 1);
+    check('потребитель попал в итог', upgraded.sets[0].members.length, 1);
+
+    var blankProject = Storage.blank();
+    check('пустой проект: потребители есть', blankProject.consumers.length > 0, true);
+    check('пустой проект: итоги есть', blankProject.sets.length > 0, true);
+    check('пустой проект читается сам собой',
+        Storage.normalize(blankProject).consumers.length, blankProject.consumers.length);
+
+    /* ---------------------------------------------------------------- */
+    section('Справочник норм: правки и свои строки');
+
+    var builtInCount = Tables.builtInNorms().length;
+
+    check('строк норматива прочитано', builtInCount, 30);
+    check('норма норматива опознана',
+        Tables.isBuiltIn('Административные здания'), true);
+    check('несуществующая норма не опознана',
+        Tables.isBuiltIn('Баня с бассейном'), false);
+
+    // Своя строка добавляется в конец и находится по имени.
+    Tables.setCustom([{
+        name: 'Прачечные механизированные',
+        unit: '1 кг сухого белья',
+        qu: 75, quh: 25, qhru: 75, qhruh: 25,
+        q0: 0.3, q0hr: 300, q0h: 0.2, q0hrh: 200, t: 8
+    }]);
+
+    check('строк стало на одну больше', Tables.norms().length, builtInCount + 1);
+
+    var added = Tables.norm('Прачечные механизированные');
+    check('своя норма найдена', added !== null, true);
+    check('своя норма помечена', added.custom, true);
+    check('холодная выведена как разность', added.quc, 50, 0.001);
+    check('расход прибором холодной равен горячей', added.q0c, 0.2, 0.001);
+
+    // Правка строки норматива заменяет её, а не добавляет вторую.
+    Tables.setCustom([{
+        name: 'Административные здания',
+        unit: '1 работающий',
+        qu: 15, quh: 5, qhru: 4, qhruh: 1.7,
+        q0: 0.14, q0hr: 80, q0h: 0.1, q0hrh: 60, t: 8
+    }]);
+
+    check('число строк не выросло', Tables.norms().length, builtInCount);
+    check('значение заменено', Tables.norm('Административные здания').qu, 15, 0.001);
+    check('правка помечена', Tables.norm('Административные здания').custom, true);
+    check('строка осталась строкой норматива',
+        Tables.isBuiltIn('Административные здания'), true);
+
+    // Снятие правок возвращает норматив нетронутым.
+    Tables.setCustom([]);
+
+    check('после сброса значение норматива', Tables.norm('Административные здания').qu, 12, 0.001);
+    check('после сброса пометки нет',
+        Tables.norm('Административные здания').custom === undefined, true);
+    check('после сброса своей строки нет', Tables.norm('Прачечные механизированные'), null);
+    check('после сброса число строк прежнее', Tables.norms().length, builtInCount);
+
+    // Проектные нормы переживают сохранение и чтение файла.
+    var withNorms = Storage.normalize({
+        norms: [{ name: 'Баня', unit: '1 посетитель', qu: 180, quh: 120,
+            qhru: 180, qhruh: 120, q0: 0.4, q0hr: 400, q0h: 0.3, q0hrh: 300, t: 3 }]
+    });
+
+    check('норма проекта прочитана', withNorms.norms.length, 1);
+    check('имя нормы сохранилось', withNorms.norms[0].name, 'Баня');
+    check('значение нормы сохранилось', withNorms.norms[0].qu, 180, 0.001);
+    check('пустой список норм остаётся пустым', Storage.normalize({}).norms.length, 0);
+
+    /* ---------------------------------------------------------------- */
+    section('Выгрузка: запись архива');
+
+    // Тест-вектор CRC32 из спецификации: строка «123456789» даёт 0xCBF43926.
+    check('CRC32 тест-вектора', Zip.crc32(Zip.utf8('123456789')), 0xCBF43926);
+    check('CRC32 пустых данных', Zip.crc32(new Uint8Array(0)), 0);
+
+    check('UTF-8: латиница — байт на символ', Zip.utf8('AZ').length, 2);
+    check('UTF-8: кириллица — два байта на символ', Zip.utf8('Стояк').length, 10);
+    check('UTF-8: Ø — два байта', Zip.utf8('Ø').length, 2);
+    check('UTF-8: первый байт Ø', Zip.utf8('Ø')[0], 0xC3);
+    check('UTF-8: м³ — три байта у степени', Zip.utf8('³').length, 2);
+
+    var archive = Zip.create([
+        { name: 'a.xml', text: '<a/>' },
+        { name: 'b/c.xml', text: '<c>Стояк</c>' }
+    ]);
+
+    check('архив начинается с подписи PK', archive[0] === 0x50 && archive[1] === 0x4B, true);
+
+    // Конец центрального каталога: последние 22 байта, подпись 0x06054B50.
+    var tail = archive.length - 22;
+    check('подпись конца каталога',
+        archive[tail] === 0x50 && archive[tail + 1] === 0x4B
+        && archive[tail + 2] === 0x05 && archive[tail + 3] === 0x06, true);
+    check('записей в каталоге', archive[tail + 10] + (archive[tail + 11] << 8), 2);
+
+    // Смещение каталога из конца архива должно указывать на его подпись.
+    var directoryAt = archive[tail + 16] + (archive[tail + 17] << 8)
+        + (archive[tail + 18] << 16) + (archive[tail + 19] << 24);
+
+    check('каталог по указанному смещению',
+        archive[directoryAt] === 0x50 && archive[directoryAt + 1] === 0x4B
+        && archive[directoryAt + 2] === 0x01 && archive[directoryAt + 3] === 0x02, true);
+
+    check('XML экранируется', Zip.xml('a<b & "c"'), 'a&lt;b &amp; &quot;c&quot;');
+
+    /* ---------------------------------------------------------------- */
+    section('Выгрузка: книга Excel и документ Word');
+
+    check('колонка 0 — A', Xlsx.column(0), 'A');
+    check('колонка 25 — Z', Xlsx.column(25), 'Z');
+    check('колонка 26 — AA', Xlsx.column(26), 'AA');
+    check('колонка 27 — AB', Xlsx.column(27), 'AB');
+    check('колонка 51 — AZ', Xlsx.column(51), 'AZ');
+    check('колонка 52 — BA', Xlsx.column(52), 'BA');
+
+    var sample = [{
+        name: 'Проверка',
+        blocks: [
+            { kind: 'title', text: 'Заголовок' },
+            { kind: 'note', text: 'Пояснение' },
+            {
+                kind: 'table',
+                head: ['Имя', 'Значение'],
+                widths: [30, 12],
+                rows: [['Расход', 5.217], ['Стоки', 6.817]],
+                total: 1
+            }
+        ]
+    }];
+
+    var book = Xlsx.build(sample);
+    var names = book.map(function (e) { return e.name; });
+
+    check('в книге есть workbook.xml', names.indexOf('xl/workbook.xml') >= 0, true);
+    check('в книге есть styles.xml', names.indexOf('xl/styles.xml') >= 0, true);
+    check('в книге есть лист', names.indexOf('xl/worksheets/sheet1.xml') >= 0, true);
+    check('в книге есть [Content_Types].xml', names.indexOf('[Content_Types].xml') >= 0, true);
+
+    var sheetXml = book[0].text;
+
+    check('число записано числом', sheetXml.indexOf('<v>5.217</v>') >= 0, true);
+    check('текст записан встроенной строкой', sheetXml.indexOf('t="inlineStr"') >= 0, true);
+    check('заголовок попал на лист', sheetXml.indexOf('Заголовок') >= 0, true);
+    check('итоговая строка выделена стилем', sheetXml.indexOf('s="7"') >= 0, true);
+
+    check('книга собирается в архив', Xlsx.bytes(sample).length > 1000, true);
+
+    var doc = Docx.build(sample, 'Проверка');
+    var docNames = doc.map(function (e) { return e.name; });
+
+    check('в документе есть document.xml', docNames.indexOf('word/document.xml') >= 0, true);
+    check('в документе есть styles.xml', docNames.indexOf('word/styles.xml') >= 0, true);
+    check('в документе есть связи', docNames.indexOf('word/_rels/document.xml.rels') >= 0, true);
+
+    var documentXml = doc[doc.length - 1].text;
+
+    check('в документе есть таблица', documentXml.indexOf('<w:tbl>') >= 0, true);
+    check('шапка таблицы повторяется на странице',
+        documentXml.indexOf('<w:tblHeader/>') >= 0, true);
+    check('лист книжный', documentXml.indexOf('w:orient="landscape"') < 0, true);
+    check('число отформатировано по-русски', documentXml.indexOf('5,217') >= 0, true);
+
+    check('документ собирается в архив', Docx.bytes(sample, 'Проверка').length > 1000, true);
+
+    /* ---------------------------------------------------------------- */
+    section('Word: таблица по образцу');
+
+    /*
+        Образец — «Таблица 2 – Основные показатели»: книжный лист, чёрные линии,
+        один шрифт, шапка в две строки с объединениями. Ничего цветного в
+        документе быть не должно: его вставляют в записку с её оформлением.
+    */
+    var templated = [{
+        name: 'Образец',
+        blocks: [{
+            kind: 'table',
+            headRows: [
+                [
+                    { t: 'Наименование потребителя (единицы измерения)', rows: 2 },
+                    { t: 'Кол-во потре-бителей сут.', rows: 2 },
+                    { t: 'Норма водо-потреб-ления, л/сут', rows: 2 },
+                    { t: 'Расчетный расход', span: 3 },
+                    { t: 'Примечание', rows: 2 }
+                ],
+                [{ t: 'м3/сут' }, { t: 'м3/час' }, { t: 'л/с' }]
+            ],
+            widths: [3681, 1106, 919, 1129, 961, 1123, 1009],
+            digits: [null, null, 0, 3, 3, 3, null],
+            rows: [['Жилые помещения', '291/620', 180, 52.38, 11.892, 4.656, '']]
+        }]
+    }];
+
+    var page = Docx.build(templated, '');
+    var xml = page[page.length - 1].text;
+
+    check('лист книжный A4', xml.indexOf('w:w="11906" w:h="16838"') >= 0, true);
+    check('поля как в образце', xml.indexOf('w:left="1701"') >= 0, true);
+    check('таблица шириной 9928', xml.indexOf('w:tblW w:w="9928"') >= 0, true);
+    check('разметка фиксированная', xml.indexOf('<w:tblLayout w:type="fixed"/>') >= 0, true);
+    check('линии чёрные', xml.indexOf('w:color="auto"') >= 0, true);
+    check('цветных линий нет', xml.indexOf('C3D6E8') < 0, true);
+    check('заливок нет', xml.indexOf('EAF3FB') < 0 && xml.indexOf('DCE7F2') < 0, true);
+    check('цветного текста нет', xml.indexOf('1D6FB8') < 0, true);
+    check('шрифт один — Times New Roman', xml.indexOf('Segoe UI') < 0, true);
+
+    // Шапка: четыре ячейки объединены по вертикали, одна — по горизонтали.
+    check('вертикальных объединений', (xml.match(/w:vMerge w:val="restart"/g) || []).length, 4);
+    check('продолжений объединения', (xml.match(/<w:vMerge\/>/g) || []).length, 4);
+    check('горизонтальное объединение на три колонки',
+        xml.indexOf('<w:gridSpan w:val="3"/>') >= 0, true);
+    check('шапка повторяется на страницах',
+        (xml.match(/<w:tblHeader\/>/g) || []).length, 2);
+
+    // Разрядность по колонкам: норма целым, расходы тремя знаками.
+    check('норма без десятичных', xml.indexOf('>180<') >= 0, true);
+    check('суточный расход тремя знаками', xml.indexOf('52,380') >= 0, true);
+    check('часовой расход тремя знаками', xml.indexOf('11,892') >= 0, true);
+    check('секундный расход тремя знаками', xml.indexOf('4,656') >= 0, true);
+
+    /* ---------------------------------------------------------------- */
+
+    var summary = document.getElementById('summary');
+    summary.textContent = failed === 0
+        ? 'Все проверки пройдены: ' + passed
+        : 'Не сошлось: ' + failed + ' из ' + (passed + failed);
+    summary.className = failed === 0 ? 'ok' : 'bad';
+})();
+</script>
+
+</body>
+</html>
